@@ -37,23 +37,16 @@ type Session struct {
 }
 
 type Observation struct {
-	ID        int64   `json:"id"`
-	SyncID    string  `json:"sync_id"`
-	SessionID string  `json:"session_id"`
-	Type      string  `json:"type"`
-	Title     string  `json:"title"`
-	Content   string  `json:"content"`
-	ToolName  *string `json:"tool_name,omitempty"`
-
-	// Legacy fields (deprecated but kept for backward compat - PR2)
-	Project *string `json:"project,omitempty"`
-	Scope   string  `json:"scope"`
-
-	// New schema fields (PR2)
-	Workspace    *string `json:"workspace,omitempty"`
-	Visibility   string  `json:"visibility"`
-	Organization *string `json:"organization,omitempty"`
-
+	ID             int64   `json:"id"`
+	SyncID         string  `json:"sync_id"`
+	SessionID      string  `json:"session_id"`
+	Type           string  `json:"type"`
+	Title          string  `json:"title"`
+	Content        string  `json:"content"`
+	ToolName       *string `json:"tool_name,omitempty"`
+	Workspace      *string `json:"workspace,omitempty"`
+	Visibility     string  `json:"visibility"`
+	Organization   *string `json:"organization,omitempty"`
 	TopicKey       *string `json:"topic_key,omitempty"`
 	RevisionCount  int     `json:"revision_count"`
 	DuplicateCount int     `json:"duplicate_count"`
@@ -85,22 +78,15 @@ type Stats struct {
 }
 
 type TimelineEntry struct {
-	ID        int64   `json:"id"`
-	SessionID string  `json:"session_id"`
-	Type      string  `json:"type"`
-	Title     string  `json:"title"`
-	Content   string  `json:"content"`
-	ToolName  *string `json:"tool_name,omitempty"`
-
-	// Legacy fields (deprecated but kept for backward compat - PR2)
-	Project *string `json:"project,omitempty"`
-	Scope   string  `json:"scope"`
-
-	// New schema fields (PR2)
-	Workspace    *string `json:"workspace,omitempty"`
-	Visibility   string  `json:"visibility"`
-	Organization *string `json:"organization,omitempty"`
-
+	ID             int64   `json:"id"`
+	SessionID      string  `json:"session_id"`
+	Type           string  `json:"type"`
+	Title          string  `json:"title"`
+	Content        string  `json:"content"`
+	ToolName       *string `json:"tool_name,omitempty"`
+	Workspace      *string `json:"workspace,omitempty"`
+	Visibility     string  `json:"visibility"`
+	Organization   *string `json:"organization,omitempty"`
 	TopicKey       *string `json:"topic_key,omitempty"`
 	RevisionCount  int     `json:"revision_count"`
 	DuplicateCount int     `json:"duplicate_count"`
@@ -120,54 +106,33 @@ type TimelineResult struct {
 }
 
 type SearchOptions struct {
-	Type string `json:"type,omitempty"`
-
-	// Legacy fields (deprecated but kept for backward compat - PR2)
-	Project string `json:"project,omitempty"`
-	Scope   string `json:"scope,omitempty"`
-
-	// New schema fields (PR2)
+	Type         string `json:"type,omitempty"`
 	Workspace    string `json:"workspace,omitempty"`
 	Visibility   string `json:"visibility,omitempty"`
 	Organization string `json:"organization,omitempty"`
-
-	Limit int `json:"limit,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
 }
 
 type AddObservationParams struct {
-	SessionID string `json:"session_id"`
-	Type      string `json:"type"`
-	Title     string `json:"title"`
-	Content   string `json:"content"`
-	ToolName  string `json:"tool_name,omitempty"`
-
-	// Legacy fields (deprecated but kept for backward compat - PR2)
-	Project string `json:"project,omitempty"`
-	Scope   string `json:"scope,omitempty"`
-
-	// New schema fields (PR2)
+	SessionID    string `json:"session_id"`
+	Type         string `json:"type"`
+	Title        string `json:"title"`
+	Content      string `json:"content"`
+	ToolName     string `json:"tool_name,omitempty"`
 	Workspace    string `json:"workspace,omitempty"`
 	Visibility   string `json:"visibility,omitempty"`
 	Organization string `json:"organization,omitempty"`
-
-	TopicKey string `json:"topic_key,omitempty"`
+	TopicKey     string `json:"topic_key,omitempty"`
 }
 
 type UpdateObservationParams struct {
-	Type    *string `json:"type,omitempty"`
-	Title   *string `json:"title,omitempty"`
-	Content *string `json:"content,omitempty"`
-
-	// Legacy fields (deprecated but kept for backward compat - PR2)
-	Project *string `json:"project,omitempty"`
-	Scope   *string `json:"scope,omitempty"`
-
-	// New schema fields (PR2)
+	Type         *string `json:"type,omitempty"`
+	Title        *string `json:"title,omitempty"`
+	Content      *string `json:"content,omitempty"`
 	Workspace    *string `json:"workspace,omitempty"`
 	Visibility   *string `json:"visibility,omitempty"`
 	Organization *string `json:"organization,omitempty"`
-
-	TopicKey *string `json:"topic_key,omitempty"`
+	TopicKey     *string `json:"topic_key,omitempty"`
 }
 
 type Prompt struct {
@@ -247,26 +212,19 @@ type syncSessionPayload struct {
 }
 
 type syncObservationPayload struct {
-	SyncID    string  `json:"sync_id"`
-	SessionID string  `json:"session_id"`
-	Type      string  `json:"type"`
-	Title     string  `json:"title"`
-	Content   string  `json:"content"`
-	ToolName  *string `json:"tool_name,omitempty"`
-
-	// Legacy fields (deprecated but kept for backward compat - PR2)
-	Project *string `json:"project,omitempty"`
-	Scope   string  `json:"scope"`
-
-	// New schema fields (PR2)
+	SyncID       string  `json:"sync_id"`
+	SessionID    string  `json:"session_id"`
+	Type         string  `json:"type"`
+	Title        string  `json:"title"`
+	Content      string  `json:"content"`
+	ToolName     *string `json:"tool_name,omitempty"`
 	Workspace    *string `json:"workspace,omitempty"`
 	Visibility   string  `json:"visibility"`
 	Organization *string `json:"organization,omitempty"`
-
-	TopicKey   *string `json:"topic_key,omitempty"`
-	Deleted    bool    `json:"deleted,omitempty"`
-	DeletedAt  *string `json:"deleted_at,omitempty"`
-	HardDelete bool    `json:"hard_delete,omitempty"`
+	TopicKey     *string `json:"topic_key,omitempty"`
+	Deleted      bool    `json:"deleted,omitempty"`
+	DeletedAt    *string `json:"deleted_at,omitempty"`
+	HardDelete   bool    `json:"hard_delete,omitempty"`
 }
 
 type syncPromptPayload struct {
@@ -969,14 +927,13 @@ func (s *Store) AllSessions(project string, limit int) ([]SessionSummary, error)
 }
 
 // AllObservations returns recent observations ordered by most recent first (for TUI browsing).
-func (s *Store) AllObservations(project, scope string, limit int) ([]Observation, error) {
+func (s *Store) AllObservations(workspace, visibility string, limit int) ([]Observation, error) {
 	if limit <= 0 {
 		limit = s.cfg.MaxContextResults
 	}
 
 	query := `
 		SELECT o.id, ifnull(o.sync_id, '') as sync_id, o.session_id, o.type, o.title, o.content, o.tool_name,
-		       o.project, o.scope,
 		       o.workspace, o.visibility, o.organization,
 		       o.topic_key, o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at
 		FROM observations o
@@ -984,15 +941,15 @@ func (s *Store) AllObservations(project, scope string, limit int) ([]Observation
 	`
 	args := []any{}
 
-	// PR2: Support both old and new filter fields (legacy project/scope OR new workspace/visibility)
-	if project != "" {
-		query += " AND (o.project = ? OR o.workspace = ?)"
-		args = append(args, project, project)
+	// PR3: Use only new fields (workspace, visibility)
+	if workspace != "" {
+		query += " AND o.workspace = ?"
+		args = append(args, workspace)
 	}
-	if scope != "" {
-		normalizedScope := normalizeScope(scope)
-		query += " AND (o.scope = ? OR o.visibility = ?)"
-		args = append(args, normalizedScope, normalizedScope)
+	if visibility != "" {
+		normalizedVisibility := normalizeScope(visibility)
+		query += " AND o.visibility = ?"
+		args = append(args, normalizedVisibility)
 	}
 
 	query += " ORDER BY o.created_at DESC LIMIT ?"
@@ -1009,7 +966,6 @@ func (s *Store) SessionObservations(sessionID string, limit int) ([]Observation,
 
 	query := `
 		SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name,
-		       project, scope,
 		       workspace, visibility, organization,
 		       topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		FROM observations
@@ -1023,23 +979,8 @@ func (s *Store) SessionObservations(sessionID string, limit int) ([]Observation,
 // ─── Observations ────────────────────────────────────────────────────────────
 
 func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
-	// PR2: Dual-write strategy - populate both old and new fields
-	// If new fields provided, use them; otherwise use old fields
-	if p.Workspace == "" && p.Project != "" {
-		p.Workspace = p.Project
-	}
-	if p.Visibility == "" && p.Scope != "" {
-		p.Visibility = p.Scope
-	}
-	if p.Workspace != "" && p.Project == "" {
-		p.Project = p.Workspace
-	}
-	if p.Visibility != "" && p.Scope == "" {
-		p.Scope = p.Visibility
-	}
-
-	// Normalize project/workspace name (lowercase + trim) before any persistence
-	p.Project, _ = NormalizeProject(p.Project)
+	// PR3: Use only new fields (workspace, visibility, organization)
+	// Normalize workspace name (lowercase + trim) before any persistence
 	p.Workspace, _ = NormalizeProject(p.Workspace)
 
 	// Strip <private>...</private> tags before persisting ANYTHING
@@ -1049,8 +990,7 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 	if len(content) > s.cfg.MaxObservationLength {
 		content = content[:s.cfg.MaxObservationLength] + "... [truncated]"
 	}
-	scope := normalizeScope(p.Scope)
-	visibility := normalizeScope(p.Visibility) // PR2: normalize visibility too
+	visibility := normalizeScope(p.Visibility)
 	normHash := hashNormalized(content)
 	topicKey := normalizeTopicKey(p.TopicKey)
 
@@ -1062,12 +1002,12 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 			err := tx.QueryRow(
 				`SELECT id FROM observations
 				 WHERE topic_key = ?
-				   AND ifnull(project, '') = ifnull(?, '')
-				   AND scope = ?
+				   AND ifnull(workspace, '') = ifnull(?, '')
+				   AND visibility = ?
 				   AND deleted_at IS NULL
 				 ORDER BY datetime(updated_at) DESC, datetime(created_at) DESC
 				 LIMIT 1`,
-				topicKey, nullableString(p.Project), scope,
+				topicKey, nullableString(p.Workspace), visibility,
 			).Scan(&existingID)
 			if err == nil {
 				if _, err := s.execHook(tx,
@@ -1109,15 +1049,15 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 		err := tx.QueryRow(
 			`SELECT id FROM observations
 			 WHERE normalized_hash = ?
-			   AND ifnull(project, '') = ifnull(?, '')
-			   AND scope = ?
+			   AND ifnull(workspace, '') = ifnull(?, '')
+			   AND visibility = ?
 			   AND type = ?
 			   AND title = ?
 			   AND deleted_at IS NULL
 			   AND datetime(created_at) >= datetime('now', ?)
 			 ORDER BY created_at DESC
 			 LIMIT 1`,
-			normHash, nullableString(p.Project), scope, p.Type, title, window,
+			normHash, nullableString(p.Workspace), visibility, p.Type, title, window,
 		).Scan(&existingID)
 		if err == nil {
 			if _, err := s.execHook(tx,
@@ -1142,18 +1082,16 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 		}
 
 		syncID := newSyncID("obs")
-		// PR2: Dual-write to both old and new columns
+		// PR3: Write only to new columns (workspace, visibility, organization)
 		res, err := s.execHook(tx,
 			`INSERT INTO observations (
 				sync_id, session_id, type, title, content, tool_name,
-				project, scope,
 				workspace, visibility, organization,
 				topic_key, normalized_hash, revision_count, duplicate_count, last_seen_at, updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), datetime('now'))`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), datetime('now'))`,
 			syncID, p.SessionID, p.Type, title, content,
 			nullableString(p.ToolName),
-			nullableString(p.Project), scope,
 			nullableString(p.Workspace), visibility, nullableString(p.Organization),
 			nullableString(topicKey), normHash,
 		)
@@ -1176,9 +1114,9 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 	return observationID, nil
 }
 
-func (s *Store) RecentObservations(project, scope string, limit int) ([]Observation, error) {
-	// Normalize project filter for case-insensitive matching
-	project, _ = NormalizeProject(project)
+func (s *Store) RecentObservations(workspace, visibility string, limit int) ([]Observation, error) {
+	// Normalize workspace filter for case-insensitive matching
+	workspace, _ = NormalizeProject(workspace)
 
 	if limit <= 0 {
 		limit = s.cfg.MaxContextResults
@@ -1186,7 +1124,6 @@ func (s *Store) RecentObservations(project, scope string, limit int) ([]Observat
 
 	query := `
 		SELECT o.id, ifnull(o.sync_id, '') as sync_id, o.session_id, o.type, o.title, o.content, o.tool_name,
-		       o.project, o.scope,
 		       o.workspace, o.visibility, o.organization,
 		       o.topic_key, o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at
 		FROM observations o
@@ -1194,15 +1131,15 @@ func (s *Store) RecentObservations(project, scope string, limit int) ([]Observat
 	`
 	args := []any{}
 
-	// PR2: Support both old and new filter fields
-	if project != "" {
-		query += " AND (o.project = ? OR o.workspace = ?)"
-		args = append(args, project, project)
+	// PR3: Use only new fields
+	if workspace != "" {
+		query += " AND o.workspace = ?"
+		args = append(args, workspace)
 	}
-	if scope != "" {
-		normalizedScope := normalizeScope(scope)
-		query += " AND (o.scope = ? OR o.visibility = ?)"
-		args = append(args, normalizedScope, normalizedScope)
+	if visibility != "" {
+		normalizedVisibility := normalizeScope(visibility)
+		query += " AND o.visibility = ?"
+		args = append(args, normalizedVisibility)
 	}
 
 	query += " ORDER BY o.created_at DESC LIMIT ?"
@@ -1330,18 +1267,15 @@ func (s *Store) SearchPrompts(query string, project string, limit int) ([]Prompt
 func (s *Store) GetObservation(id int64) (*Observation, error) {
 	row := s.db.QueryRow(
 		`SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name,
-		        project, scope,
 		        workspace, visibility, organization,
 		        topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		 FROM observations WHERE id = ? AND deleted_at IS NULL`, id,
 	)
 	var o Observation
-	// PR2: Scan both old and new fields
+	// PR3: Scan only new fields
 	if err := row.Scan(
 		&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content,
-		&o.ToolName,
-		&o.Project, &o.Scope,
-		&o.Workspace, &o.Visibility, &o.Organization,
+		&o.ToolName, &o.Workspace, &o.Visibility, &o.Organization,
 		&o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
 		&o.CreatedAt, &o.UpdatedAt, &o.DeletedAt,
 	); err != nil {
@@ -1361,8 +1295,9 @@ func (s *Store) UpdateObservation(id int64, p UpdateObservationParams) (*Observa
 		typ := obs.Type
 		title := obs.Title
 		content := obs.Content
-		project := derefString(obs.Project)
-		scope := obs.Scope
+		workspace := derefString(obs.Workspace)
+		visibility := obs.Visibility
+		organization := derefString(obs.Organization)
 		topicKey := derefString(obs.TopicKey)
 
 		if p.Type != nil {
@@ -1377,11 +1312,14 @@ func (s *Store) UpdateObservation(id int64, p UpdateObservationParams) (*Observa
 				content = content[:s.cfg.MaxObservationLength] + "... [truncated]"
 			}
 		}
-		if p.Project != nil {
-			project, _ = NormalizeProject(*p.Project)
+		if p.Workspace != nil {
+			workspace, _ = NormalizeProject(*p.Workspace)
 		}
-		if p.Scope != nil {
-			scope = normalizeScope(*p.Scope)
+		if p.Visibility != nil {
+			visibility = normalizeScope(*p.Visibility)
+		}
+		if p.Organization != nil {
+			organization = *p.Organization
 		}
 		if p.TopicKey != nil {
 			topicKey = normalizeTopicKey(*p.TopicKey)
@@ -1392,8 +1330,9 @@ func (s *Store) UpdateObservation(id int64, p UpdateObservationParams) (*Observa
 			 SET type = ?,
 			     title = ?,
 			     content = ?,
-			     project = ?,
-			     scope = ?,
+			     workspace = ?,
+			     visibility = ?,
+			     organization = ?,
 			     topic_key = ?,
 			     normalized_hash = ?,
 			     revision_count = revision_count + 1,
@@ -1402,8 +1341,9 @@ func (s *Store) UpdateObservation(id int64, p UpdateObservationParams) (*Observa
 			typ,
 			title,
 			content,
-			nullableString(project),
-			scope,
+			nullableString(workspace),
+			visibility,
+			nullableString(organization),
 			nullableString(topicKey),
 			hashNormalized(content),
 			id,
@@ -1493,8 +1433,9 @@ func (s *Store) Timeline(observationID int64, before, after int) (*TimelineResul
 
 	// 3. Get observations BEFORE the focus (same session, older, chronological order)
 	beforeRows, err := s.queryItHook(s.db, `
-		SELECT id, session_id, type, title, content, tool_name, project,
-		       scope, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+		SELECT id, session_id, type, title, content, tool_name,
+		       workspace, visibility, organization,
+		       topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		FROM observations
 		WHERE session_id = ? AND id < ? AND deleted_at IS NULL
 		ORDER BY id DESC
@@ -1510,7 +1451,8 @@ func (s *Store) Timeline(observationID int64, before, after int) (*TimelineResul
 		var e TimelineEntry
 		if err := beforeRows.Scan(
 			&e.ID, &e.SessionID, &e.Type, &e.Title, &e.Content,
-			&e.ToolName, &e.Project, &e.Scope, &e.TopicKey, &e.RevisionCount, &e.DuplicateCount, &e.LastSeenAt,
+			&e.ToolName, &e.Workspace, &e.Visibility, &e.Organization,
+			&e.TopicKey, &e.RevisionCount, &e.DuplicateCount, &e.LastSeenAt,
 			&e.CreatedAt, &e.UpdatedAt, &e.DeletedAt,
 		); err != nil {
 			return nil, err
@@ -1527,8 +1469,9 @@ func (s *Store) Timeline(observationID int64, before, after int) (*TimelineResul
 
 	// 4. Get observations AFTER the focus (same session, newer, chronological order)
 	afterRows, err := s.queryItHook(s.db, `
-		SELECT id, session_id, type, title, content, tool_name, project,
-		       scope, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+		SELECT id, session_id, type, title, content, tool_name,
+		       workspace, visibility, organization,
+		       topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		FROM observations
 		WHERE session_id = ? AND id > ? AND deleted_at IS NULL
 		ORDER BY id ASC
@@ -1544,7 +1487,8 @@ func (s *Store) Timeline(observationID int64, before, after int) (*TimelineResul
 		var e TimelineEntry
 		if err := afterRows.Scan(
 			&e.ID, &e.SessionID, &e.Type, &e.Title, &e.Content,
-			&e.ToolName, &e.Project, &e.Scope, &e.TopicKey, &e.RevisionCount, &e.DuplicateCount, &e.LastSeenAt,
+			&e.ToolName, &e.Workspace, &e.Visibility, &e.Organization,
+			&e.TopicKey, &e.RevisionCount, &e.DuplicateCount, &e.LastSeenAt,
 			&e.CreatedAt, &e.UpdatedAt, &e.DeletedAt,
 		); err != nil {
 			return nil, err
@@ -1573,8 +1517,8 @@ func (s *Store) Timeline(observationID int64, before, after int) (*TimelineResul
 // ─── Search (FTS5) ───────────────────────────────────────────────────────────
 
 func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error) {
-	// Normalize project filter for consistency
-	opts.Project, _ = NormalizeProject(opts.Project)
+	// Normalize workspace filter for consistency
+	opts.Workspace, _ = NormalizeProject(opts.Workspace)
 
 	limit := opts.Limit
 	if limit <= 0 {
@@ -1598,13 +1542,17 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 			tkSQL += " AND type = ?"
 			tkArgs = append(tkArgs, opts.Type)
 		}
-		if opts.Project != "" {
-			tkSQL += " AND project = ?"
-			tkArgs = append(tkArgs, opts.Project)
+		if opts.Workspace != "" {
+			tkSQL += " AND workspace = ?"
+			tkArgs = append(tkArgs, opts.Workspace)
 		}
-		if opts.Scope != "" {
-			tkSQL += " AND scope = ?"
-			tkArgs = append(tkArgs, normalizeScope(opts.Scope))
+		if opts.Visibility != "" {
+			tkSQL += " AND visibility = ?"
+			tkArgs = append(tkArgs, normalizeScope(opts.Visibility))
+		}
+		if opts.Organization != "" {
+			tkSQL += " AND organization = ?"
+			tkArgs = append(tkArgs, opts.Organization)
 		}
 
 		tkSQL += " ORDER BY updated_at DESC LIMIT ?"
@@ -1617,7 +1565,8 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 				var sr SearchResult
 				if err := tkRows.Scan(
 					&sr.ID, &sr.SyncID, &sr.SessionID, &sr.Type, &sr.Title, &sr.Content,
-					&sr.ToolName, &sr.Project, &sr.Scope, &sr.TopicKey, &sr.RevisionCount, &sr.DuplicateCount,
+					&sr.ToolName, &sr.Workspace, &sr.Visibility, &sr.Organization,
+					&sr.TopicKey, &sr.RevisionCount, &sr.DuplicateCount,
 					&sr.LastSeenAt, &sr.CreatedAt, &sr.UpdatedAt, &sr.DeletedAt,
 				); err != nil {
 					break
@@ -1632,8 +1581,9 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 	ftsQuery := sanitizeFTS(query)
 
 	sqlQ := `
-		SELECT o.id, ifnull(o.sync_id, '') as sync_id, o.session_id, o.type, o.title, o.content, o.tool_name, o.project,
-		       o.scope, o.topic_key, o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at,
+		SELECT o.id, ifnull(o.sync_id, '') as sync_id, o.session_id, o.type, o.title, o.content, o.tool_name,
+		       o.workspace, o.visibility, o.organization,
+		       o.topic_key, o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at,
 		       fts.rank
 		FROM observations_fts fts
 		JOIN observations o ON o.id = fts.rowid
@@ -1646,14 +1596,19 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 		args = append(args, opts.Type)
 	}
 
-	if opts.Project != "" {
-		sqlQ += " AND o.project = ?"
-		args = append(args, opts.Project)
+	if opts.Workspace != "" {
+		sqlQ += " AND o.workspace = ?"
+		args = append(args, opts.Workspace)
 	}
 
-	if opts.Scope != "" {
-		sqlQ += " AND o.scope = ?"
-		args = append(args, normalizeScope(opts.Scope))
+	if opts.Visibility != "" {
+		sqlQ += " AND o.visibility = ?"
+		args = append(args, normalizeScope(opts.Visibility))
+	}
+
+	if opts.Organization != "" {
+		sqlQ += " AND o.organization = ?"
+		args = append(args, opts.Organization)
 	}
 
 	sqlQ += " ORDER BY fts.rank LIMIT ?"
@@ -1676,7 +1631,8 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 		var sr SearchResult
 		if err := rows.Scan(
 			&sr.ID, &sr.SyncID, &sr.SessionID, &sr.Type, &sr.Title, &sr.Content,
-			&sr.ToolName, &sr.Project, &sr.Scope, &sr.TopicKey, &sr.RevisionCount, &sr.DuplicateCount,
+			&sr.ToolName, &sr.Workspace, &sr.Visibility, &sr.Organization,
+			&sr.TopicKey, &sr.RevisionCount, &sr.DuplicateCount,
 			&sr.LastSeenAt, &sr.CreatedAt, &sr.UpdatedAt, &sr.DeletedAt,
 			&sr.Rank,
 		); err != nil {
@@ -1700,8 +1656,9 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 // Used for backfilling embeddings after model installation.
 func (s *Store) ListObservationsForEmbedding() ([]Observation, error) {
 	rows, err := s.queryItHook(s.db, `
-		SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, project,
-		       scope, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+		SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name,
+		       workspace, visibility, organization,
+		       topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		FROM observations
 		WHERE deleted_at IS NULL AND embedding IS NULL
 		ORDER BY id DESC
@@ -1716,8 +1673,8 @@ func (s *Store) ListObservationsForEmbedding() ([]Observation, error) {
 		var o Observation
 		if err := rows.Scan(
 			&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content,
-			&o.ToolName, &o.Project, &o.Scope, &o.TopicKey,
-			&o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
+			&o.ToolName, &o.Workspace, &o.Visibility, &o.Organization,
+			&o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
 			&o.CreatedAt, &o.UpdatedAt, &o.DeletedAt,
 		); err != nil {
 			return nil, err
@@ -1759,8 +1716,9 @@ func (s *Store) SearchSemantic(queryVec []float32, limit int) ([]SearchResult, e
 	}
 
 	rows, err := s.queryItHook(s.db, `
-		SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, project,
-		       scope, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at,
+		SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name,
+		       workspace, visibility, organization,
+		       topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at,
 		       embedding
 		FROM observations
 		WHERE deleted_at IS NULL AND embedding IS NOT NULL
@@ -1782,8 +1740,8 @@ func (s *Store) SearchSemantic(queryVec []float32, limit int) ([]SearchResult, e
 		var blob []byte
 		if err := rows.Scan(
 			&sr.ID, &sr.SyncID, &sr.SessionID, &sr.Type, &sr.Title, &sr.Content,
-			&sr.ToolName, &sr.Project, &sr.Scope, &sr.TopicKey,
-			&sr.RevisionCount, &sr.DuplicateCount, &sr.LastSeenAt,
+			&sr.ToolName, &sr.Workspace, &sr.Visibility, &sr.Organization,
+			&sr.TopicKey, &sr.RevisionCount, &sr.DuplicateCount, &sr.LastSeenAt,
 			&sr.CreatedAt, &sr.UpdatedAt, &sr.DeletedAt, &blob,
 		); err != nil {
 			continue
@@ -1896,18 +1854,18 @@ func (s *Store) Stats() (*Stats, error) {
 
 // ─── Context Formatting ─────────────────────────────────────────────────────
 
-func (s *Store) FormatContext(project, scope string) (string, error) {
-	sessions, err := s.RecentSessions(project, 5)
+func (s *Store) FormatContext(workspace, visibility string) (string, error) {
+	sessions, err := s.RecentSessions(workspace, 5)
 	if err != nil {
 		return "", err
 	}
 
-	observations, err := s.RecentObservations(project, scope, s.cfg.MaxContextResults)
+	observations, err := s.RecentObservations(workspace, visibility, s.cfg.MaxContextResults)
 	if err != nil {
 		return "", err
 	}
 
-	prompts, err := s.RecentPrompts(project, 10)
+	prompts, err := s.RecentPrompts(workspace, 10)
 	if err != nil {
 		return "", err
 	}
@@ -1982,7 +1940,6 @@ func (s *Store) Export() (*ExportData, error) {
 	// Observations
 	obsRows, err := s.queryItHook(s.db,
 		`SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name,
-		        project, scope,
 		        workspace, visibility, organization,
 		        topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		 FROM observations ORDER BY id`,
@@ -1993,12 +1950,10 @@ func (s *Store) Export() (*ExportData, error) {
 	defer obsRows.Close()
 	for obsRows.Next() {
 		var o Observation
-		// PR2: Scan both old and new fields
+		// PR3: Scan only new fields
 		if err := obsRows.Scan(
 			&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content,
-			&o.ToolName,
-			&o.Project, &o.Scope,
-			&o.Workspace, &o.Visibility, &o.Organization,
+			&o.ToolName, &o.Workspace, &o.Visibility, &o.Organization,
 			&o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
 			&o.CreatedAt, &o.UpdatedAt, &o.DeletedAt,
 		); err != nil {
@@ -3328,12 +3283,10 @@ func (s *Store) queryObservations(query string, args ...any) ([]Observation, err
 	var results []Observation
 	for rows.Next() {
 		var o Observation
-		// PR2: Scan both old and new fields
+		// PR3: Scan only new fields (workspace, visibility, organization)
 		if err := rows.Scan(
 			&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content,
-			&o.ToolName,
-			&o.Project, &o.Scope, // old fields
-			&o.Workspace, &o.Visibility, &o.Organization, // new fields
+			&o.ToolName, &o.Workspace, &o.Visibility, &o.Organization,
 			&o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
 			&o.CreatedAt, &o.UpdatedAt, &o.DeletedAt,
 		); err != nil {
