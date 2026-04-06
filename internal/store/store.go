@@ -1531,8 +1531,8 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 	var directResults []SearchResult
 	if strings.Contains(query, "/") {
 		tkSQL := `
-			SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, project,
-			       scope, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+			SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, workspace,
+			       visibility, organization, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 			FROM observations
 			WHERE topic_key = ? AND deleted_at IS NULL
 		`
@@ -1836,7 +1836,7 @@ func (s *Store) Stats() (*Stats, error) {
 	s.db.QueryRow("SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL").Scan(&stats.TotalObservations)
 	s.db.QueryRow("SELECT COUNT(*) FROM user_prompts").Scan(&stats.TotalPrompts)
 
-	rows, err := s.queryItHook(s.db, "SELECT project FROM observations WHERE project IS NOT NULL AND deleted_at IS NULL GROUP BY project ORDER BY MAX(created_at) DESC")
+	rows, err := s.queryItHook(s.db, "SELECT workspace FROM observations WHERE workspace IS NOT NULL AND deleted_at IS NULL GROUP BY workspace ORDER BY MAX(created_at) DESC")
 	if err != nil {
 		return stats, nil
 	}
@@ -2475,7 +2475,7 @@ func (s *Store) MigrateProject(oldName, newName string) (*MigrateResult, error) 
 	var exists bool
 	err := s.db.QueryRow(
 		`SELECT EXISTS(
-			SELECT 1 FROM observations WHERE project = ?
+			SELECT 1 FROM observations WHERE workspace = ?
 			UNION ALL
 			SELECT 1 FROM sessions WHERE project = ?
 			UNION ALL
@@ -3553,7 +3553,7 @@ func normalizeScope(scope string) string {
 	if v == "personal" {
 		return "personal"
 	}
-	return "project"
+	return "work"
 }
 
 // NormalizeProject applies canonical project name normalization:
