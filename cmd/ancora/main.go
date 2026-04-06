@@ -95,9 +95,9 @@ var (
 )
 
 func main() {
+	// Default to TUI if no arguments provided
 	if len(os.Args) < 2 {
-		printUsage()
-		exitFunc(1)
+		os.Args = append(os.Args, "tui")
 	}
 
 	// Check for updates on every invocation.
@@ -1133,7 +1133,17 @@ func cmdProjectsPrune(cfg store.Config) {
 }
 
 func cmdSetup() {
-	agents := setupSupportedAgents()
+	// Check for flags
+	autoInstall := false
+	skipModel := false
+	for i := 2; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--auto-install":
+			autoInstall = true
+		case "--skip-model":
+			skipModel = true
+		}
+	}
 
 	// If agent name given directly: ancora setup opencode
 	if len(os.Args) > 2 && !strings.HasPrefix(os.Args[2], "-") {
@@ -1147,38 +1157,30 @@ func cmdSetup() {
 		return
 	}
 
-	// Interactive selection
-	fmt.Println("ancora setup — Install agent plugin")
-	fmt.Println()
-	fmt.Println("Which agent do you want to set up?")
-	fmt.Println()
-
-	for i, a := range agents {
-		fmt.Printf("  [%d] %s\n", i+1, a.Description)
-		fmt.Printf("      Install to: %s\n\n", a.InstallDir)
+	// If --auto-install, download model non-interactively
+	if autoInstall {
+		fmt.Println("Installing embedding model...")
+		destPath := filepath.Join(embed.ModelInstallPath(), embed.ModelFileName)
+		downloader := setup.NewDownloader(destPath)
+		if err := downloader.Download(); err != nil {
+			fatal(fmt.Errorf("download failed: %w", err))
+		}
+		fmt.Printf("✓ Model installed: %s\n", destPath)
+		return
 	}
 
-	fmt.Print("Enter choice (1-", len(agents), "): ")
-	var input string
-	scanInputLine(&input)
-
-	choice, err := strconv.Atoi(strings.TrimSpace(input))
-	if err != nil || choice < 1 || choice > len(agents) {
-		fmt.Fprintln(os.Stderr, "Invalid choice.")
-		exitFunc(1)
+	// If --skip-model, exit immediately
+	if skipModel {
+		fmt.Println("Skipping embedding model installation.")
+		return
 	}
 
-	selected := agents[choice-1]
-	fmt.Printf("\nInstalling %s plugin...\n", selected.Name)
-
-	result, err := setupInstallAgent(selected.Name)
-	if err != nil {
+	// Launch interactive TUI wizard
+	model := setup.NewWizard()
+	p := newTeaProgram(model)
+	if _, err := runTeaProgram(p); err != nil {
 		fatal(err)
 	}
-
-	fmt.Printf("✓ Installed %s plugin (%d files)\n", result.Agent, result.Files)
-	fmt.Printf("  → %s\n", result.Destination)
-	printPostInstall(result.Agent)
 }
 
 func printPostInstall(agent string) {
@@ -1243,7 +1245,11 @@ Commands:
                      Merge similar project names into one canonical name
                        --all      Scan ALL projects for similar name groups
                        --dry-run  Preview what would be merged (no changes)
-  setup [agent]      Install/setup agent integration (opencode, claude-code)
+  setup [agent]      Interactive setup wizard for embedding model and agent plugins
+                       No args: TUI wizard for model installation
+                       Agent name: Install agent plugin (opencode, claude-code)
+                       --auto-install: Download model non-interactively
+                       --skip-model: Skip model installation
   doctor             Run system health checks (database, embeddings, FTS5)
 
   version            Print version
@@ -1415,7 +1421,7 @@ func cmdDoctor(cfg store.Config) {
 	} else {
 		if errors.Is(err, embed.ErrModelNotFound) {
 			fmt.Printf("  ⚠️  Model not found\n")
-			fmt.Printf("     Set ANCORA_EMBED_MODEL or install to: %s\n", filepath.Join(embed.ModelInstallPath(), embed.ModelFileName))
+			fmt.Printf("     Run `ancora setup` to install (~180 MB)\n")
 			fmt.Printf("     Fallback: keyword-only search (FTS5)\n")
 		} else if errors.Is(err, embed.ErrEmbedderUnavailable) {
 			fmt.Printf("  ⚠️  llama-embedding CLI not found in PATH\n")
