@@ -105,6 +105,9 @@ func ResolveTools(input string) map[string]bool {
 		if token == "all" {
 			return nil
 		}
+		// Backward compatibility: strip ancora_ prefix if user provides it
+		token = strings.TrimPrefix(token, "ancora_")
+
 		if profile, ok := Profiles[token]; ok {
 			for tool := range profile {
 				result[tool] = true
