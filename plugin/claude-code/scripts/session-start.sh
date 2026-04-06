@@ -62,12 +62,12 @@ cat <<'PROTOCOL'
 You have ancora memory tools. This protocol is MANDATORY and always ACTIVE.
 
 ### Core tools — always available, no ToolSearch needed
-mem_save, mem_search, mem_context, mem_session_summary, mem_get_observation, mem_save_prompt
+ancora_save, ancora_search, ancora_context, ancora_summarize, ancora_get, ancora_save_prompt
 
-Use ToolSearch for other tools: mem_update, mem_suggest_topic_key, mem_session_start, mem_session_end, mem_stats, mem_delete, mem_timeline, mem_capture_passive
+Use ToolSearch for other tools: ancora_update, ancora_suggest_topic, ancora_start, ancora_end, ancora_stats, ancora_delete, ancora_timeline, ancora_capture
 
 ### Proactive save — do NOT wait for user to ask
-Call `mem_save` IMMEDIATELY after ANY of these:
+Call `ancora_save` IMMEDIATELY after ANY of these:
 - Decision made (architecture, convention, workflow, tool choice)
 - Bug fixed (include root cause)
 - Convention or workflow documented/updated
@@ -80,16 +80,16 @@ Call `mem_save` IMMEDIATELY after ANY of these:
 - User rejects an approach or expresses a preference ("no, better X", "I prefer X", "siempre hacé X")
 - Discussion concludes with a clear direction chosen
 
-**Self-check after EVERY task**: "Did I or the user just make a decision, confirm a recommendation, express a preference, fix a bug, learn something, or establish a convention? If yes → mem_save NOW."
+**Self-check after EVERY task**: "Did I or the user just make a decision, confirm a recommendation, express a preference, fix a bug, learn something, or establish a convention? If yes → ancora_save NOW."
 
 ### Search memory when:
 - User asks to recall anything ("remember", "what did we do", "acordate", "qué hicimos")
 - Starting work on something that might have been done before
 - User mentions a topic you have no context on
-- User's FIRST message references the project, a feature, or a problem — call `mem_search` with keywords from their message to check for prior work before responding
+- User's FIRST message references the project, a feature, or a problem — call `ancora_search` with keywords from their message to check for prior work before responding
 
 ### Session close — before saying "done"/"listo":
-Call `mem_session_summary` with: Goal, Discoveries, Accomplished, Next Steps, Relevant Files.
+Call `ancora_summarize` with: Goal, Discoveries, Accomplished, Next Steps, Relevant Files.
 PROTOCOL
 
 # Inject memory context if available

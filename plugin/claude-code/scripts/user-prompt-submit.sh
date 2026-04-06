@@ -4,7 +4,7 @@
 # On the FIRST message of a session: injects a ToolSearch instruction to force
 # Claude Code to load all ancora memory tools (which are deferred by default).
 #
-# On subsequent messages: checks when the last mem_save was for the current
+# On subsequent messages: checks when the last ancora_save was for the current
 # project. If it's been > 15 minutes AND the session has been active > 5
 # minutes, injects a nudge reminding the agent to save.
 #
@@ -49,9 +49,9 @@ if [ ! -f "$STATE_FILE" ]; then
   # Create the state file immediately to prevent repeat injections
   touch "$STATE_FILE" 2>/dev/null || true
 
-  # Inject ToolSearch + mem_context instruction.
+  # Inject ToolSearch + ancora_context instruction.
   # Use --arg so jq handles all escaping; use printf to avoid echo interpreting \n.
-  TOOL_MSG="CRITICAL FIRST ACTION — Execute this ToolSearch NOW before responding to the user:"$'\n'"select:mcp__plugin_ancora_ancora__mem_save,mcp__plugin_ancora_ancora__mem_search,mcp__plugin_ancora_ancora__mem_context,mcp__plugin_ancora_ancora__mem_session_summary,mcp__plugin_ancora_ancora__mem_get_observation,mcp__plugin_ancora_ancora__mem_save_prompt"$'\n\n'"After loading tools, call mem_context to check for prior session history before responding."
+  TOOL_MSG="CRITICAL FIRST ACTION — Execute this ToolSearch NOW before responding to the user:"$'\n'"select:mcp__plugin_ancora_ancora__ancora_save,mcp__plugin_ancora_ancora__ancora_search,mcp__plugin_ancora_ancora__ancora_context,mcp__plugin_ancora_ancora__ancora_summarize,mcp__plugin_ancora_ancora__ancora_get,mcp__plugin_ancora_ancora__ancora_save_prompt"$'\n\n'"After loading tools, call ancora_context to check for prior session history before responding."
   OUTPUT=$(jq -n --arg msg "$TOOL_MSG" '{"systemMessage": $msg}')
 
   printf '%s\n' "$OUTPUT"
@@ -120,7 +120,7 @@ ELAPSED=$(( NOW_EPOCH - LAST_EPOCH ))
 # Nudge if last save was > 15 minutes ago (900 seconds)
 if [ "$ELAPSED" -gt 900 ]; then
   OUTPUT=$(jq -n \
-    '{"systemMessage": "MEMORY REMINDER: It'\''s been over 15 minutes since your last save. If you'\''ve made decisions, discoveries, or completed significant work, call mem_save now."}')
+    '{"systemMessage": "MEMORY REMINDER: It'\''s been over 15 minutes since your last save. If you'\''ve made decisions, discoveries, or completed significant work, call ancora_save now."}')
 fi
 
 echo "$OUTPUT"

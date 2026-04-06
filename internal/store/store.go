@@ -1590,6 +1590,37 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 	return results, nil
 }
 
+// ListObservationsForEmbedding returns all non-deleted observations that don't have embeddings yet.
+// Used for backfilling embeddings after model installation.
+func (s *Store) ListObservationsForEmbedding() ([]Observation, error) {
+	rows, err := s.queryItHook(s.db, `
+		SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, project,
+		       scope, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+		FROM observations
+		WHERE deleted_at IS NULL AND embedding IS NULL
+		ORDER BY id DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []Observation
+	for rows.Next() {
+		var o Observation
+		if err := rows.Scan(
+			&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content,
+			&o.ToolName, &o.Project, &o.Scope, &o.TopicKey,
+			&o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
+			&o.CreatedAt, &o.UpdatedAt, &o.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		results = append(results, o)
+	}
+	return results, rows.Err()
+}
+
 // ─── Semantic Search (vector embeddings) ─────────────────────────────────────
 
 // SetEmbedding stores a float32 embedding vector for a given observation ID.
@@ -2692,6 +2723,53 @@ func (s *Store) PruneProject(project string) (*PruneResult, error) {
 		res, err = s.execHook(tx, `DELETE FROM sessions WHERE project = ?`, project)
 		if err != nil {
 			return fmt.Errorf("prune sessions: %w", err)
+		}
+		result.SessionsDeleted, _ = res.RowsAffected()
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// ─── Database Purge ───────────────────────────────────────────────────────────
+
+// PurgeResult holds the outcome of purging all data from the database.
+type PurgeResult struct {
+	ObservationsDeleted int64 `json:"observations_deleted"`
+	SessionsDeleted     int64 `json:"sessions_deleted"`
+	PromptsDeleted      int64 `json:"prompts_deleted"`
+}
+
+// PurgeAll deletes ALL data from the database - observations, sessions, and prompts.
+// This is a destructive operation that cannot be undone.
+// Returns the number of deleted items for each table.
+// Note: Must delete in order to respect foreign keys - prompts/observations before sessions.
+func (s *Store) PurgeAll() (*PurgeResult, error) {
+	result := &PurgeResult{}
+
+	err := s.withTx(func(tx *sql.Tx) error {
+		// Delete all prompts first (FK to sessions)
+		res, err := s.execHook(tx, `DELETE FROM user_prompts`)
+		if err != nil {
+			return fmt.Errorf("purge prompts: %w", err)
+		}
+		result.PromptsDeleted, _ = res.RowsAffected()
+
+		// Delete all observations (FK to sessions)
+		res, err = s.execHook(tx, `DELETE FROM observations`)
+		if err != nil {
+			return fmt.Errorf("purge observations: %w", err)
+		}
+		result.ObservationsDeleted, _ = res.RowsAffected()
+
+		// Delete all sessions last (no FK dependencies)
+		res, err = s.execHook(tx, `DELETE FROM sessions`)
+		if err != nil {
+			return fmt.Errorf("purge sessions: %w", err)
 		}
 		result.SessionsDeleted, _ = res.RowsAffected()
 

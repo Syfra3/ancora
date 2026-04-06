@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Syfra3/ancora/internal/embed"
+	"github.com/Syfra3/ancora/internal/search"
 	"github.com/Syfra3/ancora/internal/store"
 )
 
@@ -38,6 +40,7 @@ type SyncStatus struct {
 
 type Server struct {
 	store      *store.Store
+	embedder   search.Embedder
 	mux        *http.ServeMux
 	port       int
 	listen     func(network, address string) (net.Listener, error)
@@ -47,7 +50,11 @@ type Server struct {
 }
 
 func New(s *store.Store, port int) *Server {
-	srv := &Server{store: s, port: port, listen: net.Listen, serve: http.Serve}
+	var embedder search.Embedder
+	if e, err := embed.New(); err == nil {
+		embedder = e
+	}
+	srv := &Server{store: s, embedder: embedder, port: port, listen: net.Listen, serve: http.Serve}
 	srv.mux = http.NewServeMux()
 	srv.routes()
 	return srv
@@ -265,15 +272,20 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results, err := s.store.Search(query, store.SearchOptions{
+	searchResults, _, err := search.SearchWithOptions(query, store.SearchOptions{
 		Type:    r.URL.Query().Get("type"),
 		Project: r.URL.Query().Get("project"),
 		Scope:   r.URL.Query().Get("scope"),
 		Limit:   queryInt(r, "limit", 10),
-	})
+	}, s.embedder, s.store)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	results := make([]store.SearchResult, 0, len(searchResults))
+	for _, r := range searchResults {
+		results = append(results, r.SearchResult)
 	}
 
 	jsonResponse(w, http.StatusOK, results)

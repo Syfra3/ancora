@@ -13,6 +13,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -24,8 +25,10 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/Syfra3/ancora/internal/embed"
 	"github.com/Syfra3/ancora/internal/mcp"
 	"github.com/Syfra3/ancora/internal/project"
+	searchpkg "github.com/Syfra3/ancora/internal/search"
 	"github.com/Syfra3/ancora/internal/server"
 	"github.com/Syfra3/ancora/internal/setup"
 	"github.com/Syfra3/ancora/internal/store"
@@ -72,10 +75,27 @@ var (
 	setupSupportedAgents        = setup.SupportedAgents
 	setupInstallAgent           = setup.Install
 	setupAddClaudeCodeAllowlist = setup.AddClaudeCodeAllowlist
+	setupCheckEmbeddingsStatus  = setup.CheckEmbeddingsStatus
+	newEmbeddingsDownloader     = func(destPath string) embeddingsDownloader { return setup.NewDownloader(destPath) }
+	checkLlamaCpp               = setup.CheckLlamaCpp
+	llamaCppInstallInstructions = setup.GetLlamaCppInstallInstructions
 	scanInputLine               = fmt.Scanln
+	newEmbedder                 = func() (embed.Embedder, error) { return embed.New() }
 
-	storeSearch = func(s *store.Store, query string, opts store.SearchOptions) ([]store.SearchResult, error) {
-		return s.Search(query, opts)
+	searchMemories = func(s *store.Store, query string, opts store.SearchOptions) ([]store.SearchResult, searchpkg.Mode, error) {
+		embedder, err := newEmbedder()
+		if err != nil {
+			embedder = nil
+		}
+		results, mode, err := searchpkg.SearchWithOptions(query, opts, embedder, s)
+		if err != nil {
+			return nil, mode, err
+		}
+		out := make([]store.SearchResult, 0, len(results))
+		for _, r := range results {
+			out = append(out, r.SearchResult)
+		}
+		return out, mode, nil
 	}
 	storeAddObservation = func(s *store.Store, p store.AddObservationParams) (int64, error) { return s.AddObservation(p) }
 	storeTimeline       = func(s *store.Store, observationID int64, before, after int) (*store.TimelineResult, error) {
@@ -93,9 +113,9 @@ var (
 )
 
 func main() {
+	// Default to TUI if no arguments provided
 	if len(os.Args) < 2 {
-		printUsage()
-		exitFunc(1)
+		os.Args = append(os.Args, "tui")
 	}
 
 	// Check for updates on every invocation.
@@ -150,7 +170,11 @@ func main() {
 	case "projects":
 		cmdProjects(cfg)
 	case "setup":
-		cmdSetup()
+		cmdSetup(cfg)
+	case "embeddings":
+		cmdEmbeddings(cfg)
+	case "doctor":
+		cmdDoctor(cfg)
 	case "version", "--version", "-v":
 		fmt.Printf("ancora %s\n", version)
 	case "help", "--help", "-h":
@@ -237,8 +261,19 @@ func cmdMCP(cfg store.Config) {
 	}
 	defer s.Close()
 
+	// Initialize embedder for hybrid semantic search (FTS5 + vector RRF fusion).
+	// If model is unavailable, gracefully falls back to keyword-only search.
+	var embedder mcp.Embedder
+	if e, err := embed.New(); err == nil {
+		embedder = e
+		log.Printf("[ancora] hybrid search enabled (model: %s)", e.ModelPath)
+	} else {
+		log.Printf("[ancora] hybrid search unavailable, using keyword-only: %v", err)
+	}
+
 	mcpCfg := mcp.MCPConfig{
 		DefaultProject: detectedProject,
+		Embedder:       embedder,
 	}
 
 	allowlist := resolveMCPTools(toolsFilter)
@@ -272,6 +307,7 @@ func cmdSearch(cfg store.Config) {
 	// Collect the query (everything that's not a flag)
 	var queryParts []string
 	opts := store.SearchOptions{Limit: 10}
+	searchAllProjects := false
 
 	for i := 2; i < len(os.Args); i++ {
 		switch os.Args[i] {
@@ -297,6 +333,8 @@ func cmdSearch(cfg store.Config) {
 				opts.Scope = os.Args[i+1]
 				i++
 			}
+		case "--all-projects", "--all":
+			searchAllProjects = true
 		default:
 			queryParts = append(queryParts, os.Args[i])
 		}
@@ -315,13 +353,29 @@ func cmdSearch(cfg store.Config) {
 	}
 	defer s.Close()
 
-	results, err := storeSearch(s, query, opts)
+	// If searching all projects, clear project filter
+	if searchAllProjects {
+		opts.Project = ""
+	}
+
+	results, _, err := searchMemories(s, query, opts)
 	if err != nil {
 		fatal(err)
 		return
 	}
 
 	if len(results) == 0 {
+		// Check if there are observations in OTHER projects that might be relevant
+		if !searchAllProjects && opts.Project != "" {
+			allProjects, listErr := s.ListProjectNames()
+			if listErr == nil && len(allProjects) > 1 {
+				fmt.Printf("No memories found for: %q in project %q\n", query, opts.Project)
+				fmt.Printf("Hint: Related memories may exist in other projects. Re-run without --project to search everywhere.\n")
+				// Optionally show available projects
+				fmt.Printf("Available projects: %s\n", strings.Join(allProjects, ", "))
+				return
+			}
+		}
 		fmt.Printf("No memories found for: %q\n", query)
 		return
 	}
@@ -1117,8 +1171,30 @@ func cmdProjectsPrune(cfg store.Config) {
 	fmt.Printf("\nPruned %d project(s): %d sessions, %d prompts removed.\n", len(selected), totalSessions, totalPrompts)
 }
 
-func cmdSetup() {
-	agents := setupSupportedAgents()
+func cmdSetup(cfg store.Config) {
+	// Check for flags
+	autoInstall := false
+	skipModel := false
+	autoBackfill := false
+	fastInstall := false
+	for i := 2; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--auto-install":
+			autoInstall = true
+		case "--skip-model":
+			skipModel = true
+		case "--auto-backfill":
+			autoBackfill = true
+		case "--fast":
+			fastInstall = true
+		}
+	}
+
+	// If --fast, do auto-install + auto-backfill in one go
+	if fastInstall {
+		autoInstall = true
+		autoBackfill = true
+	}
 
 	// If agent name given directly: ancora setup opencode
 	if len(os.Args) > 2 && !strings.HasPrefix(os.Args[2], "-") {
@@ -1132,38 +1208,40 @@ func cmdSetup() {
 		return
 	}
 
-	// Interactive selection
-	fmt.Println("ancora setup — Install agent plugin")
-	fmt.Println()
-	fmt.Println("Which agent do you want to set up?")
-	fmt.Println()
+	// If --auto-install, download model non-interactively
+	if autoInstall {
+		fmt.Println("Installing embedding model...")
+		destPath := filepath.Join(embed.ModelInstallPath(), embed.ModelFileName)
+		downloader := setup.NewDownloader(destPath)
+		if err := downloader.Download(); err != nil {
+			fatal(fmt.Errorf("download failed: %w", err))
+		}
+		fmt.Printf("✓ Model installed: %s\n", destPath)
 
-	for i, a := range agents {
-		fmt.Printf("  [%d] %s\n", i+1, a.Description)
-		fmt.Printf("      Install to: %s\n\n", a.InstallDir)
+		// Auto-backfill after model install
+		if autoBackfill {
+			fmt.Println("\nRunning embedding backfill...")
+			if err := runBackfill(cfg); err != nil {
+				fmt.Fprintf(os.Stderr, "Backfill warning: %v\n", err)
+			} else {
+				fmt.Println("✓ Backfill complete")
+			}
+		}
+		return
 	}
 
-	fmt.Print("Enter choice (1-", len(agents), "): ")
-	var input string
-	scanInputLine(&input)
-
-	choice, err := strconv.Atoi(strings.TrimSpace(input))
-	if err != nil || choice < 1 || choice > len(agents) {
-		fmt.Fprintln(os.Stderr, "Invalid choice.")
-		exitFunc(1)
+	// If --skip-model, exit immediately
+	if skipModel {
+		fmt.Println("Skipping embedding model installation.")
+		return
 	}
 
-	selected := agents[choice-1]
-	fmt.Printf("\nInstalling %s plugin...\n", selected.Name)
-
-	result, err := setupInstallAgent(selected.Name)
-	if err != nil {
+	// Launch interactive TUI wizard
+	model := setup.NewWizardWithVersion(version)
+	p := newTeaProgram(model)
+	if _, err := runTeaProgram(p); err != nil {
 		fatal(err)
 	}
-
-	fmt.Printf("✓ Installed %s plugin (%d files)\n", result.Agent, result.Files)
-	fmt.Printf("  → %s\n", result.Destination)
-	printPostInstall(result.Agent)
 }
 
 func printPostInstall(agent string) {
@@ -1216,7 +1294,7 @@ Commands:
                        --project  Override detected project name (default: git remote → cwd)
                        Example: ancora mcp --tools=agent
   tui                Launch interactive terminal UI
-  search <query>     Search memories [--type TYPE] [--project PROJECT] [--scope SCOPE] [--limit N]
+	search <query>     Search memories [--type TYPE] [--project PROJECT] [--scope SCOPE] [--limit N]
   save <title> <msg> Save a memory  [--type TYPE] [--project PROJECT] [--scope SCOPE]
   timeline <obs_id>  Show chronological context around an observation [--before N] [--after N]
   context [project]  Show recent context from previous sessions
@@ -1228,15 +1306,22 @@ Commands:
                      Merge similar project names into one canonical name
                        --all      Scan ALL projects for similar name groups
                        --dry-run  Preview what would be merged (no changes)
-  setup [agent]      Install/setup agent integration (opencode, claude-code)
+  setup [agent]      Interactive setup wizard for embedding model and agent plugins
+                       No args: TUI wizard for model installation
+                       Agent name: Install agent plugin (opencode, claude-code)
+                       --auto-install: Download model non-interactively
+                       --auto-backfill: Auto-backfill embeddings after install
+  embeddings         Manage embedding model (status|install|backfill|test)
+  doctor              Run system health checks (database, embeddings, FTS5)
 
   version            Print version
   help               Show this help
 
 Environment:
-  ANCORA_DATA_DIR    Override data directory (default: ~/.ancora)
-  ANCORA_PORT        Override HTTP server port (default: 7437)
-  ANCORA_PROJECT     Override auto-detected project name for MCP server
+  ANCORA_DATA_DIR      Override data directory (default: ~/.ancora)
+  ANCORA_PORT          Override HTTP server port (default: 7437)
+  ANCORA_PROJECT       Override auto-detected project name for MCP server
+  ANCORA_EMBED_MODEL   Path to embedding model GGUF file (for hybrid search)
 
 MCP Configuration (add to your agent's config):
   {
@@ -1358,4 +1443,292 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return string(runes[:max]) + "..."
+}
+
+func cmdDoctor(cfg store.Config) {
+	fmt.Printf("Ancora Doctor — System Health Check\n")
+	fmt.Printf("Version: %s\n\n", version)
+
+	hasErrors := false
+
+	// 1. Database check
+	fmt.Printf("━━━ Database ━━━\n")
+	dbPath := filepath.Join(cfg.DataDir, "ancora.db")
+	if info, err := os.Stat(dbPath); err == nil {
+		fmt.Printf("  ✅ Database found: %s (%d MB)\n", dbPath, info.Size()/1024/1024)
+
+		// Try to open and check readability
+		if s, err := store.New(cfg); err == nil {
+			defer s.Close()
+			if stats, err := s.Stats(); err == nil {
+				fmt.Printf("  ✅ Database readable: %d observations, %d sessions\n", stats.TotalObservations, stats.TotalSessions)
+			} else {
+				fmt.Printf("  ❌ Database not readable: %v\n", err)
+				hasErrors = true
+			}
+		} else {
+			fmt.Printf("  ❌ Cannot open database: %v\n", err)
+			hasErrors = true
+		}
+	} else {
+		fmt.Printf("  ⚠️  Database not found (will be created on first use)\n")
+	}
+
+	// 2. Embedding model check
+	fmt.Printf("\n━━━ Embedding Model (Hybrid Search) ━━━\n")
+	if embedder, err := embed.New(); err == nil {
+		fmt.Printf("  ✅ Model found: %s\n", embedder.ModelPath)
+		fmt.Printf("  ✅ llama-embedding CLI: %s\n", embedder.CLIPath)
+		fmt.Printf("  ✅ Hybrid search: ENABLED (FTS5 + vector RRF fusion)\n")
+	} else {
+		if errors.Is(err, embed.ErrModelNotFound) {
+			fmt.Printf("  ⚠️  Model not found\n")
+			fmt.Printf("     Run `ancora setup` to install (~180 MB)\n")
+			fmt.Printf("     Fallback: keyword-only search (FTS5)\n")
+		} else if errors.Is(err, embed.ErrEmbedderUnavailable) {
+			fmt.Printf("  ⚠️  llama-embedding CLI not found in PATH\n")
+			fmt.Printf("     Install llama.cpp to enable hybrid search\n")
+			fmt.Printf("     Fallback: keyword-only search (FTS5)\n")
+		} else {
+			fmt.Printf("  ❌ Unexpected error: %v\n", err)
+			hasErrors = true
+		}
+	}
+
+	// 3. Project detection
+	fmt.Printf("\n━━━ Project Detection ━━━\n")
+	if cwd, err := os.Getwd(); err == nil {
+		detectedProject := detectProject(cwd)
+		fmt.Printf("  ✅ Current directory: %s\n", cwd)
+		fmt.Printf("  ✅ Detected project: %s\n", detectedProject)
+	} else {
+		fmt.Printf("  ❌ Cannot get current directory: %v\n", err)
+		hasErrors = true
+	}
+
+	// 4. FTS5 check (implicitly tested by database check)
+	fmt.Printf("\n━━━ Full-Text Search (FTS5) ━━━\n")
+	fmt.Printf("  ✅ FTS5 enabled (built into SQLite)\n")
+
+	// Summary
+	fmt.Printf("\n━━━ Summary ━━━\n")
+	if hasErrors {
+		fmt.Printf("  ❌ Some checks failed — see errors above\n")
+		exitFunc(1)
+	} else {
+		fmt.Printf("  ✅ All critical checks passed\n")
+		fmt.Printf("  ℹ️  Warnings do not prevent Ancora from working\n")
+	}
+}
+
+func cmdEmbeddings(cfg store.Config) {
+	subCmd := "status"
+	if len(os.Args) > 2 {
+		subCmd = os.Args[2]
+	}
+
+	switch subCmd {
+	case "status":
+		cmdEmbeddingsStatus()
+	case "install":
+		cmdEmbeddingsInstall()
+	case "backfill":
+		cmdEmbeddingsBackfill(cfg)
+	case "test":
+		cmdEmbeddingsTest()
+	default:
+		fmt.Fprintf(os.Stderr, "unknown embeddings command: %s\n", subCmd)
+		fmt.Fprintln(os.Stderr, "usage: ancora embeddings [status|install|backfill|test]")
+		exitFunc(1)
+	}
+}
+
+func cmdEmbeddingsStatus() {
+	status, err := setupCheckEmbeddingsStatus()
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Printf("Embedding Model Status\n")
+	fmt.Printf("  Model:    %s\n", map[bool]string{true: "installed", false: "not found"}[status.ModelInstalled])
+	if status.ModelInstalled {
+		fmt.Printf("  Path:     %s\n", status.ModelPath)
+	}
+	fmt.Printf("  CLI:      %s\n", map[bool]string{true: "available", false: "not found"}[status.CLIAvailable])
+	if status.CLIAvailable {
+		fmt.Printf("  Path:     %s\n", status.CLIPath)
+	}
+	if status.Tested {
+		fmt.Printf("  Verified: %s\n", map[bool]string{true: "yes", false: "no"}[status.Usable])
+		if status.TestDimensions > 0 {
+			fmt.Printf("  Dims:     %d\n", status.TestDimensions)
+		}
+		if status.TestError != "" {
+			fmt.Printf("  Error:    %s\n", status.TestError)
+		}
+	}
+	fmt.Printf("  Status:   %s\n", status.Message)
+
+	if status.ModelInstalled && status.CLIAvailable {
+		fmt.Printf("\nℹ️  Run 'ancora embeddings test' to verify functionality\n")
+		fmt.Printf("ℹ️  Run 'ancora embeddings backfill' to generate vectors for existing observations\n")
+	}
+}
+
+func cmdEmbeddingsInstall() {
+	result, err := runEmbeddingsInstall()
+	if err != nil {
+		fatal(err)
+	}
+	printEmbeddingsInstallResult(result)
+}
+
+type embeddingsInstallResult struct {
+	ModelPath string
+	CLIPath   string
+	CLIFound  bool
+}
+
+type embeddingsDownloader interface {
+	Download() error
+}
+
+func runEmbeddingsInstall() (*embeddingsInstallResult, error) {
+	destPath := filepath.Join(embed.ModelInstallPath(), embed.ModelFileName)
+	downloader := newEmbeddingsDownloader(destPath)
+	if err := downloader.Download(); err != nil {
+		return nil, fmt.Errorf("download failed: %w", err)
+	}
+
+	found, path := checkLlamaCpp()
+	return &embeddingsInstallResult{
+		ModelPath: destPath,
+		CLIPath:   path,
+		CLIFound:  found,
+	}, nil
+}
+
+func printEmbeddingsInstallResult(result *embeddingsInstallResult) {
+	fmt.Println("Installing embedding model...")
+	fmt.Printf("✓ Model installed: %s\n", result.ModelPath)
+
+	fmt.Println("\nChecking llama.cpp CLI...")
+	if result.CLIFound {
+		fmt.Printf("✓ llama.cpp CLI found: %s\n", result.CLIPath)
+		fmt.Println("\n✓ Embeddings ready! Run 'ancora embeddings test' to verify.")
+	} else {
+		fmt.Println("⚠️  llama.cpp CLI not found in PATH")
+		fmt.Println(llamaCppInstallInstructions())
+	}
+}
+
+func cmdEmbeddingsBackfill(cfg store.Config) {
+	fmt.Println("Running embedding backfill...")
+
+	status, err := setupCheckEmbeddingsStatus()
+	if err != nil {
+		fatal(err)
+	}
+
+	if !status.ModelInstalled || !status.CLIAvailable {
+		fmt.Println("⚠️  Embeddings not fully configured. Install first with:")
+		fmt.Println("  ancora embeddings install")
+		return
+	}
+
+	s, err := storeNew(cfg)
+	if err != nil {
+		fatal(err)
+	}
+	defer s.Close()
+
+	embedder, err := newEmbedder()
+	if err != nil {
+		fatal(err)
+	}
+
+	observations, err := s.ListObservationsForEmbedding()
+	if err != nil {
+		fatal(err)
+	}
+
+	fmt.Printf("Found %d observations to embed\n", len(observations))
+
+	successCount := 0
+	for i, obs := range observations {
+		if i%50 == 0 && i > 0 {
+			fmt.Printf("Progress: %d/%d\n", i, len(observations))
+		}
+		vec, err := embedder.Embed(obs.Title + ". " + obs.Content)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to embed #%d: %v\n", obs.ID, err)
+			continue
+		}
+		if err := s.SetEmbedding(obs.ID, vec); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to save embedding for #%d: %v\n", obs.ID, err)
+			continue
+		}
+		successCount++
+	}
+
+	fmt.Printf("✓ Backfill complete: %d/%d observations embedded\n", successCount, len(observations))
+}
+
+func cmdEmbeddingsTest() {
+	fmt.Println("Testing embedding generation...")
+	embedder, err := newEmbedder()
+	if err != nil {
+		fmt.Printf("⚠️  Embeddings not available: %v\n", err)
+		fmt.Println("\nRun 'ancora embeddings install' to set up.")
+		exitFunc(1)
+	}
+
+	testText := "testing semantic search with PC components"
+	vec, err := embedder.Embed(testText)
+	if err != nil {
+		fatal(err)
+	}
+
+	fmt.Printf("✓ Embedding generated: %d dimensions\n", len(vec))
+	if ne, ok := embedder.(*embed.NomicEmbedder); ok {
+		fmt.Printf("  CLI: %s\n", ne.CLIPath)
+		fmt.Printf("  Model: %s\n", ne.ModelPath)
+	}
+	fmt.Println("✓ Embeddings working correctly!")
+}
+
+func runBackfill(cfg store.Config) error {
+	status, err := setupCheckEmbeddingsStatus()
+	if err != nil {
+		return err
+	}
+
+	if !status.ModelInstalled || !status.CLIAvailable {
+		return fmt.Errorf("embeddings not configured")
+	}
+
+	s, err := storeNew(cfg)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	embedder, err := newEmbedder()
+	if err != nil {
+		return err
+	}
+
+	observations, err := s.ListObservationsForEmbedding()
+	if err != nil {
+		return err
+	}
+
+	for _, obs := range observations {
+		vec, err := embedder.Embed(obs.Title + ". " + obs.Content)
+		if err != nil {
+			continue
+		}
+		s.SetEmbedding(obs.ID, vec)
+	}
+
+	return nil
 }

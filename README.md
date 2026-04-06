@@ -8,28 +8,28 @@
 
 **Ancora** is a persistent memory system for AI coding agents like Claude Code and OpenCode. It enables agents to remember context, decisions, and patterns across sessions using hybrid search and local embeddings.
 
-## 🎯 100% Free & Open Source
+## 100% Free & Open Source
 
-- ✅ Full local memory storage (SQLite + FTS5)
-- ✅ 15 MCP tools for memory management
-- ✅ Hybrid keyword + semantic search
-- ✅ Local embeddings (nomic-embed-text)
-- ✅ CLI, TUI, HTTP API
-- ✅ Works offline, zero telemetry
-- ✅ MIT licensed
+- Full local memory storage (SQLite + FTS5)
+- 15 MCP tools for memory management
+- Hybrid keyword + semantic search
+- Local embeddings (nomic-embed-text)
+- CLI, TUI, HTTP API
+- Works offline, zero telemetry
+- MIT licensed
 
-## ☁️ Cloud Sync (Coming Soon)
+## Cloud Sync (Coming Soon)
 
 Want your memories synced across all your devices?
 
-**[Join the Waitlist for Syfra Cloud](https://syfra.dev/waitlist)**
+**[Join the Waitlist for Syfra Cloud](https://syfra.co/waitlist)**
 
 **What you'll get:**
-- 🔄 Multi-device sync (Mac, Linux, Windows)
-- 🔒 End-to-end encryption
-- 👥 Partner/team sharing
-- 🌐 Web dashboard
-- 📊 Advanced analytics
+- Multi-device sync (Mac, Linux, Windows)
+- End-to-end encryption
+- Partner/team sharing
+- Web dashboard
+- Advanced analytics
 
 ---
 
@@ -165,7 +165,7 @@ syfra import backup.json
 
 ## Features
 
-- **15 MCP Tools** - Full memory management suite (mem_save, mem_search, mem_context, etc.)
+- **15 MCP Tools** - Full memory management suite (ancora_save, ancora_search, ancora_context, etc.)
 - **Hybrid Search** - FTS5 keyword + vector semantic search with RRF fusion
 - **Local Embeddings** - nomic-embed-text-v1.5 (768-dim, optional, ~270MB)
 - **HTTP API** - Engram-compatible REST endpoints on port 7437
@@ -200,26 +200,26 @@ internal/
 
 Core tools for AI agents to save and retrieve memories:
 
-- **mem_save** - Save decisions, bugs, discoveries proactively
-- **mem_search** - Hybrid keyword + semantic search (limit: 20)
-- **mem_context** - Get recent session context
-- **mem_session_summary** - Save structured end-of-session summaries
-- **mem_get_observation** - Fetch full untruncated content by ID
-- **mem_update** - Update existing observation
-- **mem_suggest_topic_key** - Generate stable keys for topic upserts
-- **mem_session_start** - Register session start
-- **mem_session_end** - Mark session complete
-- **mem_save_prompt** - Save user prompts for context
-- **mem_capture_passive** - Extract learnings from formatted text
+- **ancora_save** - Save decisions, bugs, discoveries proactively
+- **ancora_search** - Hybrid keyword + semantic search (limit: 20)
+- **ancora_context** - Get recent session context
+- **ancora_summarize** - Save structured end-of-session summaries
+- **ancora_get** - Fetch full untruncated content by ID
+- **ancora_update** - Update existing observation
+- **ancora_suggest_topic** - Generate stable keys for topic upserts
+- **ancora_start** - Register session start
+- **ancora_end** - Mark session complete
+- **ancora_save_prompt** - Save user prompts for context
+- **ancora_capture** - Extract learnings from formatted text
 
 ### Admin Profile (4 tools)
 
 Management tools for TUI/CLI/dashboards:
 
-- **mem_delete** - Soft or hard delete observations
-- **mem_stats** - Memory system statistics
-- **mem_timeline** - Chronological context around observation
-- **mem_merge_projects** - Consolidate project name variants
+- **ancora_delete** - Soft or hard delete observations
+- **ancora_stats** - Memory system statistics
+- **ancora_timeline** - Chronological context around observation
+- **ancora_merge** - Consolidate project name variants
 
 ## Usage Examples
 
@@ -454,11 +454,15 @@ make release
 
 ## Roadmap
 
-- [ ] Cloud sync (Engram-compatible protocol)
+- [ ] Sync engine abstraction (local and proprietary cloud backends)
 - [ ] Web dashboard
 - [ ] Multi-model embedding support
 - [ ] Advanced analytics and insights
 - [ ] Team collaboration features
+
+## Support
+
+For questions or issues, contact: support@syfra.co
 
 ## License
 
