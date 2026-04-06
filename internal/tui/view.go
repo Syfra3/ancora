@@ -124,8 +124,12 @@ func (m Model) View() string {
 		content = m.viewProjects()
 	case ScreenSetup:
 		content = m.viewSetup()
+	case ScreenSetupEnv:
+		content = m.viewSetupEnv()
 	case ScreenMoveObservation:
 		content = m.viewMoveObservation()
+	case ScreenPurge:
+		content = m.viewPurge()
 	default:
 		content = "Unknown screen"
 	}
@@ -156,7 +160,9 @@ func (m Model) viewDashboard() string {
 		Foreground(colorSubtext).
 		Width(40)
 
-	for i, item := range dashboardMenuItems {
+	menuItems := getDashboardMenuItems(m.IsFullyInstalled)
+
+	for i, item := range menuItems {
 		cursor := "  "
 		labelStyle := menuLabelStyle
 		if i == m.Cursor {
@@ -169,8 +175,12 @@ func (m Model) viewDashboard() string {
 		b.WriteString(fmt.Sprintf("%s%s %s\n", cursor, label, desc))
 	}
 
-	// Footer
-	b.WriteString(renderFooter("↑↓ navigate • Enter select • p projects • s search • q exit"))
+	// Footer - conditional based on installation status
+	footerHelp := "↑↓ navigate • Enter select • q exit"
+	if m.IsFullyInstalled {
+		footerHelp = "↑↓ navigate • Enter select • p projects • s search • q exit"
+	}
+	b.WriteString(renderFooter(footerHelp))
 
 	return b.String()
 }
@@ -908,6 +918,139 @@ func (m Model) viewSetup() string {
 	return b.String()
 }
 
+func (m Model) viewSetupEnv() string {
+	var b strings.Builder
+
+	b.WriteString(m.renderHeader(""))
+
+	// Step 0: Select plugin
+	if m.SetupEnvStep == 0 {
+		menuLabelStyle := lipgloss.NewStyle().
+			Foreground(colorText).
+			Bold(false).
+			Width(25)
+
+		menuDescStyle := lipgloss.NewStyle().
+			Foreground(colorSubtext).
+			Width(40)
+
+		setupEnvMenuItems := []MenuItem{
+			{"OpenCode", "Install MCP plugin for OpenCode agent", "opencode"},
+			{"Claude Code", "Install MCP plugin for Claude Code agent", "claude-code"},
+		}
+
+		for i, item := range setupEnvMenuItems {
+			cursor := "  "
+			labelStyle := menuLabelStyle
+			if i == m.Cursor {
+				cursor = lipgloss.NewStyle().Foreground(colorMint).Render("▸ ")
+				labelStyle = menuLabelStyle.Copy().Foreground(colorLavender)
+			}
+
+			label := labelStyle.Render(item.Label)
+			desc := menuDescStyle.Render(item.Description)
+			b.WriteString(fmt.Sprintf("%s%s %s\n", cursor, label, desc))
+		}
+
+		b.WriteString("\n")
+		b.WriteString(detailContentStyle.Render("This will:"))
+		b.WriteString("\n")
+		b.WriteString(timestampStyle.Render("  1. Download embedding model (~180 MB)"))
+		b.WriteString("\n")
+		b.WriteString(timestampStyle.Render("  2. Generate embeddings for existing memories"))
+		b.WriteString("\n")
+		b.WriteString(timestampStyle.Render("  3. Install selected agent plugin"))
+		b.WriteString("\n\n")
+		b.WriteString(renderFooter("↑↓ navigate • Enter select • esc back"))
+
+		return b.String()
+	}
+
+	// Step 1: Running setup with progress
+	if m.SetupEnvStep == 1 {
+		b.WriteString(sectionHeadingStyle.Render(fmt.Sprintf("Setting up Ancora with %s", m.SetupEnvPlugin)))
+		b.WriteString("\n\n")
+
+		// Task 1: Download model
+		if m.SetupEnvModelDone {
+			b.WriteString(fmt.Sprintf("%s Download embedding model\n",
+				lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render("✓")))
+		} else if m.SetupEnvRunning && m.SetupEnvModelProgress > 0 {
+			progressBar := renderProgressBar(m.SetupEnvModelProgress)
+			b.WriteString(fmt.Sprintf("%s Downloading embedding model... %s\n",
+				m.SetupSpinner.View(),
+				progressBar))
+		} else if m.SetupEnvRunning {
+			b.WriteString(fmt.Sprintf("%s Download embedding model\n",
+				m.SetupSpinner.View()))
+		} else {
+			b.WriteString(fmt.Sprintf("%s Download embedding model\n",
+				timestampStyle.Render("○")))
+		}
+
+		// Task 2: Backfill
+		if m.SetupEnvBackfillDone {
+			b.WriteString(fmt.Sprintf("%s Generate embeddings\n",
+				lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render("✓")))
+		} else if m.SetupEnvRunning && m.SetupEnvModelDone {
+			b.WriteString(fmt.Sprintf("%s Generating embeddings...\n",
+				m.SetupSpinner.View()))
+		} else {
+			b.WriteString(fmt.Sprintf("%s Generate embeddings\n",
+				timestampStyle.Render("○")))
+		}
+
+		// Task 3: Install plugin
+		if m.SetupEnvPluginDone {
+			b.WriteString(fmt.Sprintf("%s Install %s plugin\n",
+				lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render("✓"),
+				m.SetupEnvPlugin))
+		} else if m.SetupEnvRunning && m.SetupEnvBackfillDone {
+			b.WriteString(fmt.Sprintf("%s Installing %s plugin...\n",
+				m.SetupSpinner.View(),
+				m.SetupEnvPlugin))
+		} else {
+			b.WriteString(fmt.Sprintf("%s Install %s plugin\n",
+				timestampStyle.Render("○"),
+				m.SetupEnvPlugin))
+		}
+
+		b.WriteString("\n")
+
+		if m.SetupEnvError != "" {
+			b.WriteString(errorStyle.Render("✗ Setup failed: " + m.SetupEnvError))
+			b.WriteString("\n")
+			b.WriteString(renderFooter("enter/esc back to dashboard"))
+		} else if !m.SetupEnvRunning && m.SetupEnvPluginDone {
+			b.WriteString(fmt.Sprintf("%s Setup complete!\n",
+				lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render("✓")))
+			b.WriteString("\n")
+			b.WriteString(renderFooter("enter/esc back to dashboard"))
+		} else {
+			b.WriteString(renderFooter("Setting up..."))
+		}
+
+		return b.String()
+	}
+
+	return b.String()
+}
+
+func renderProgressBar(progress float64) string {
+	width := 30
+	filled := int(progress * float64(width))
+	bar := ""
+	for i := 0; i < width; i++ {
+		if i < filled {
+			bar += "█"
+		} else {
+			bar += "░"
+		}
+	}
+	percentage := int(progress * 100)
+	return fmt.Sprintf("[%s] %d%%", bar, percentage)
+}
+
 // ─── Shared Renderers ────────────────────────────────────────────────────────
 
 func (m Model) renderObservationListItem(index int, id int64, obsType, title, content, createdAt string, project *string) string {
@@ -978,4 +1121,55 @@ func derefString(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// ─── Purge Database ───────────────────────────────────────────────────────────
+
+func (m Model) viewPurge() string {
+	var b strings.Builder
+
+	// Header with section title
+	b.WriteString(m.renderHeader("⚠️  PURGE DATABASE"))
+
+	// Show stats before purge
+	if m.Stats != nil {
+		b.WriteString(warningStyle.Render("This will PERMANENTLY DELETE ALL DATA:\n"))
+		b.WriteString(fmt.Sprintf("  • %d observations\n", m.Stats.TotalObservations))
+		b.WriteString(fmt.Sprintf("  • %d sessions\n", m.Stats.TotalSessions))
+		b.WriteString(fmt.Sprintf("  • %d prompts\n\n", m.Stats.TotalPrompts))
+	}
+
+	// Show confirmation prompt or results
+	if m.PurgeResult != nil {
+		// Purge completed - show results
+		b.WriteString(successStyle.Render("✅ Database purged successfully!\n\n"))
+		b.WriteString(fmt.Sprintf("Deleted:\n"))
+		b.WriteString(fmt.Sprintf("  • %d observations\n", m.PurgeResult.ObservationsDeleted))
+		b.WriteString(fmt.Sprintf("  • %d sessions\n", m.PurgeResult.SessionsDeleted))
+		b.WriteString(fmt.Sprintf("  • %d prompts\n\n", m.PurgeResult.PromptsDeleted))
+		b.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Press any key to return to dashboard"))
+	} else if m.PurgeError != "" {
+		// Purge failed
+		b.WriteString(errorStyle.Render("Error: " + m.PurgeError + "\n\n"))
+		b.WriteString(renderFooter("esc go back"))
+	} else {
+		// Show confirmation prompt
+		b.WriteString(warningStyle.Render("Are you sure? This cannot be undone!\n\n"))
+
+		// Options
+		options := []string{"No, go back", "Yes, delete everything"}
+		for i, opt := range options {
+			cursor := "  "
+			style := menuLabelStyle
+			if i == m.PurgeConfirmCursor {
+				cursor = lipgloss.NewStyle().Foreground(colorMint).Render("▸ ")
+				style = menuLabelStyle.Copy().Foreground(colorLavender)
+			}
+			b.WriteString(fmt.Sprintf("%s%s\n", cursor, style.Render(opt)))
+		}
+
+		b.WriteString(renderFooter("j/k navigate • enter confirm • esc cancel"))
+	}
+
+	return b.String()
 }

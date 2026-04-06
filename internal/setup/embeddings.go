@@ -26,6 +26,10 @@ type EmbeddingsSetupResult struct {
 	CLIAvailable   bool
 	ModelPath      string
 	CLIPath        string
+	Tested         bool
+	Usable         bool
+	TestDimensions int
+	TestError      string
 	Message        string
 }
 
@@ -69,7 +73,8 @@ func CheckEmbeddingsStatus() (*EmbeddingsSetupResult, error) {
 
 	// Build status message
 	if result.ModelInstalled && result.CLIAvailable {
-		result.Message = "Embeddings fully configured"
+		dims, testErr := testEmbedderFn()
+		applyVerificationResult(result, dims, testErr)
 	} else if result.ModelInstalled && !result.CLIAvailable {
 		result.Message = "Model installed but llama-embedding CLI not found"
 	} else if !result.ModelInstalled && result.CLIAvailable {
@@ -240,12 +245,13 @@ func SetupEmbeddings(interactive bool) (*EmbeddingsSetupResult, error) {
 	// If everything is already set up, verify it works
 	if status.ModelInstalled && status.CLIAvailable {
 		// Test the embedder to ensure it actually works
-		if err := testEmbedderFn(); err != nil {
+		dims, testErr := testEmbedderFn()
+		applyVerificationResult(status, dims, testErr)
+		if testErr != nil {
 			status.CLIAvailable = false
-			status.Message = fmt.Sprintf("llama-embedding test failed: %v", err)
+			status.Message = fmt.Sprintf("llama-embedding test failed: %v", testErr)
 			// Continue to show instructions
 		} else {
-			status.Message = "Embeddings fully configured and tested"
 			return status, nil
 		}
 	}
@@ -288,8 +294,10 @@ func SetupEmbeddings(interactive bool) (*EmbeddingsSetupResult, error) {
 			// Re-check after user claims they installed it
 			if cliPath, err := resolveEmbedCLI(); err == nil {
 				// Test it actually works
-				if err := testEmbedderFn(); err != nil {
-					status.Message = fmt.Sprintf("llama-embedding found but test failed: %v", err)
+				dims, testErr := testEmbedderFn()
+				applyVerificationResult(status, dims, testErr)
+				if testErr != nil {
+					status.Message = fmt.Sprintf("llama-embedding found but test failed: %v", testErr)
 					fmt.Printf("⚠️  %s\n", status.Message)
 					return status, nil
 				}
@@ -303,9 +311,18 @@ func SetupEmbeddings(interactive bool) (*EmbeddingsSetupResult, error) {
 		}
 	}
 
+	if status.ModelInstalled && status.CLIAvailable && !status.Tested {
+		dims, testErr := testEmbedderFn()
+		applyVerificationResult(status, dims, testErr)
+	}
+
 	// Final status
 	if status.ModelInstalled && status.CLIAvailable {
-		status.Message = "Embeddings fully configured and tested"
+		if status.Usable {
+			status.Message = "Embeddings fully configured and tested"
+		} else if !status.Tested {
+			status.Message = "Embeddings fully configured"
+		}
 	} else {
 		status.Message = "Embeddings setup incomplete"
 	}
@@ -313,24 +330,39 @@ func SetupEmbeddings(interactive bool) (*EmbeddingsSetupResult, error) {
 	return status, nil
 }
 
+func applyVerificationResult(result *EmbeddingsSetupResult, dims int, testErr error) {
+	result.Tested = true
+	result.TestDimensions = 0
+	result.TestError = ""
+	result.Usable = false
+	if testErr != nil {
+		result.Message = fmt.Sprintf("llama-embedding found but test failed: %v", testErr)
+		result.TestError = testErr.Error()
+		return
+	}
+	result.Usable = true
+	result.TestDimensions = dims
+	result.Message = "Embeddings fully configured and tested"
+}
+
 // testEmbedder tests that the embedder actually works by generating a test embedding.
-func testEmbedder() error {
+func testEmbedder() (int, error) {
 	embedder, err := embed.New()
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// Try to embed a simple test string
 	vec, err := embedder.Embed("test")
 	if err != nil {
-		return fmt.Errorf("embedding generation failed: %w", err)
+		return 0, fmt.Errorf("embedding generation failed: %w", err)
 	}
 
 	if len(vec) != embed.Dims {
-		return fmt.Errorf("expected %d dimensions, got %d", embed.Dims, len(vec))
+		return 0, fmt.Errorf("expected %d dimensions, got %d", embed.Dims, len(vec))
 	}
 
-	return nil
+	return len(vec), nil
 }
 
 // InstallLlamaCpp attempts to install llama.cpp using the system package manager.

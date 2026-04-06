@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/Syfra3/ancora/internal/mcp"
 	"github.com/Syfra3/ancora/internal/store"
 	versioncheck "github.com/Syfra3/ancora/internal/version"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 func testConfig(t *testing.T) store.Config {
@@ -311,6 +311,21 @@ func TestCmdSaveAndSearch(t *testing.T) {
 	}
 	if !strings.Contains(noneOut, "No memories found") {
 		t.Fatalf("expected empty search message, got: %q", noneOut)
+	}
+}
+
+func TestCmdSearchDefaultsToAllProjects(t *testing.T) {
+	cfg := testConfig(t)
+	mustSeedObservation(t, cfg, "s-alpha", "alpha", "decision", "alpha hit", "shared-search-term alpha", "project")
+	mustSeedObservation(t, cfg, "s-beta", "beta", "decision", "beta hit", "shared-search-term beta", "project")
+
+	withArgs(t, "ancora", "search", "shared-search-term")
+	stdout, stderr := captureOutput(t, func() { cmdSearch(cfg) })
+	if stderr != "" {
+		t.Fatalf("expected no stderr from cross-project search, got: %q", stderr)
+	}
+	if !strings.Contains(stdout, "alpha hit") || !strings.Contains(stdout, "beta hit") {
+		t.Fatalf("expected search without --project to include multiple projects, got: %q", stdout)
 	}
 }
 

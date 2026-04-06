@@ -24,8 +24,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
+)
+
+var (
+	osStatEmbed  = os.Stat
+	execLookPath = exec.LookPath
+	execCommand  = exec.Command
 )
 
 // ErrModelNotFound is returned when the GGUF model file does not exist.
@@ -59,7 +66,7 @@ type NomicEmbedder struct {
 func New() (*NomicEmbedder, error) {
 	modelPath := modelFilePath()
 
-	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
+	if _, err := osStatEmbed(modelPath); os.IsNotExist(err) {
 		return nil, ErrModelNotFound
 	}
 
@@ -73,18 +80,12 @@ func New() (*NomicEmbedder, error) {
 
 // Embed generates a 768-dim float32 embedding for text.
 func (e *NomicEmbedder) Embed(text string) ([]float32, error) {
-	if _, err := os.Stat(e.ModelPath); os.IsNotExist(err) {
+	if _, err := osStatEmbed(e.ModelPath); os.IsNotExist(err) {
 		return nil, ErrModelNotFound
 	}
 
 	// llama-embedding outputs JSON lines: {"embedding": [...]}
-	cmd := exec.Command(e.CLIPath,
-		"--model", e.ModelPath,
-		"--prompt", text,
-		"--embd-output-format", "json",
-		"--log-disable",
-		"-p", text,
-	)
+	cmd := execCommand(e.CLIPath, embedCommandArgs(e.CLIPath, e.ModelPath, text)...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -122,18 +123,32 @@ func resolveEmbedCLI() (string, error) {
 		"llama-embedding",
 		"llama.cpp-embedding",
 		"embedding",
+		"llama-cli",
 	}
 	for _, name := range candidates {
-		if p, err := exec.LookPath(name); err == nil {
+		if p, err := execLookPath(name); err == nil {
 			return p, nil
 		}
 	}
 	return "", ErrEmbedderUnavailable
 }
 
-// embeddingResponse is the JSON format output by llama-embedding.
+func embedCommandArgs(cliPath, modelPath, text string) []string {
+	args := []string{"--model", modelPath, "--embd-output-format", "json"}
+	if path.Base(cliPath) == "llama-cli" {
+		args = append(args, "--embeddings")
+	}
+	args = append(args, "-p", text)
+	return args
+}
+
+// embeddingResponse handles both legacy llama-embedding output and the newer
+// OpenAI-style JSON shape returned by modern llama.cpp.
 type embeddingResponse struct {
 	Embedding []float32 `json:"embedding"`
+	Data      []struct {
+		Embedding []float32 `json:"embedding"`
+	} `json:"data"`
 }
 
 // parseEmbeddingOutput parses the JSON output from llama-embedding.
@@ -143,8 +158,10 @@ func parseEmbeddingOutput(data []byte) ([]float32, error) {
 
 	// Try direct JSON object first.
 	var resp embeddingResponse
-	if err := json.Unmarshal(data, &resp); err == nil && len(resp.Embedding) > 0 {
-		return resp.Embedding, nil
+	if err := json.Unmarshal(data, &resp); err == nil {
+		if embedding := firstEmbedding(resp); len(embedding) > 0 {
+			return embedding, nil
+		}
 	}
 
 	// Try newline-delimited JSON (take last non-empty line).
@@ -155,12 +172,24 @@ func parseEmbeddingOutput(data []byte) ([]float32, error) {
 			continue
 		}
 		var r embeddingResponse
-		if err := json.Unmarshal(line, &r); err == nil && len(r.Embedding) > 0 {
-			return r.Embedding, nil
+		if err := json.Unmarshal(line, &r); err == nil {
+			if embedding := firstEmbedding(r); len(embedding) > 0 {
+				return embedding, nil
+			}
 		}
 	}
 
 	return nil, fmt.Errorf("ancora: could not parse embedding output (got %d bytes)", len(data))
+}
+
+func firstEmbedding(resp embeddingResponse) []float32 {
+	if len(resp.Embedding) > 0 {
+		return resp.Embedding
+	}
+	if len(resp.Data) > 0 && len(resp.Data[0].Embedding) > 0 {
+		return resp.Data[0].Embedding
+	}
+	return nil
 }
 
 // MockEmbedder is a test embedder that returns a fixed vector.

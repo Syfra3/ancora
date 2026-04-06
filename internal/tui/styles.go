@@ -209,3 +209,22 @@ var (
 			PaddingLeft(2).
 			MarginTop(1)
 )
+
+// ─── Purge Styles ───────────────────────────────────────────────────────────────
+
+var (
+	// Warning text
+	warningStyle = lipgloss.NewStyle().
+			Foreground(colorPeach).
+			Bold(true)
+
+	// Success text
+	successStyle = lipgloss.NewStyle().
+			Foreground(colorGreen).
+			Bold(true)
+
+	// Menu label (used in purge confirmation)
+	menuLabelStyle = lipgloss.NewStyle().
+			Foreground(colorText).
+			Width(25)
+)

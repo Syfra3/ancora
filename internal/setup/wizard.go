@@ -28,18 +28,21 @@ const (
 
 // WizardModel is the Bubble Tea model for the setup wizard.
 type WizardModel struct {
-	state           WizardState
-	err             error
-	downloader      *Downloader
-	progress        progress.Model
-	downloaded      int64
-	total           int64
-	speed           float64
-	quitting        bool
-	llamaCppPath    string
-	llamaCppSkipped bool
-	installingLlama bool
-	pluginChoice    string // "opencode", "claude-code", "skip"
+	state             WizardState
+	err               error
+	downloader        *Downloader
+	progress          progress.Model
+	downloaded        int64
+	total             int64
+	speed             float64
+	quitting          bool
+	llamaCppPath      string
+	llamaCppSkipped   bool
+	installingLlama   bool
+	pluginChoice      string // "opencode", "claude-code", "skip"
+	pluginChoiceIndex int    // 0=opencode, 1=claude-code, 2=skip
+	menuChoiceIndex   int    // For main menu when integrated with TUI
+	version           string // Version string to display
 }
 
 // NewWizard creates a new setup wizard model.
@@ -47,6 +50,15 @@ func NewWizard() WizardModel {
 	return WizardModel{
 		state:    StateWelcome,
 		progress: progress.New(progress.WithDefaultGradient()),
+	}
+}
+
+// NewWizardWithVersion creates a new setup wizard model with version info.
+func NewWizardWithVersion(ver string) WizardModel {
+	return WizardModel{
+		state:    StateWelcome,
+		progress: progress.New(progress.WithDefaultGradient()),
+		version:  ver,
 	}
 }
 
@@ -143,16 +155,28 @@ func (m WizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-		case "1", "2", "3":
+		case "up", "down":
 			if m.state == StatePluginChoice {
 				switch msg.String() {
-				case "1":
+				case "up":
+					m.pluginChoiceIndex = (m.pluginChoiceIndex + 2) % 3
+				case "down":
+					m.pluginChoiceIndex = (m.pluginChoiceIndex + 1) % 3
+				}
+				return m, nil
+			}
+
+		case "1", "2", "3":
+			if m.state == StatePluginChoice {
+				m.pluginChoiceIndex = int(msg.String()[0] - '1')
+				switch m.pluginChoiceIndex {
+				case 0:
 					m.pluginChoice = "opencode"
 					return m, m.installPlugin("opencode")
-				case "2":
+				case 1:
 					m.pluginChoice = "claude-code"
 					return m, m.installPlugin("claude-code")
-				case "3":
+				case 2:
 					m.pluginChoice = "skip"
 					m.state = StateSuccess
 					return m, nil
@@ -346,13 +370,31 @@ var (
 	hintStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")). // Gray
 			Italic(true)
+
+	bannerStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("39"))
 )
+
+var asciiBanner = `
+██████╗ ███╗   ██╗ ██████╗ ██████╗ ██████╗  █████╗ 
+██╔══██╗████╗  ██║██╔════╝██╔═══██╗██╔══██╗██╔══██╗
+██████╔╝██╔██╗ ██║██║     ██║   ██║██████╔╝███████║
+██╔══██║██║╚██╗██║██║     ██║   ██║██╔══██╗██╔══██║
+██║  ██║██║ ╚████║╚██████╗╚██████╔╝██║  ██║██║  ██║
+╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
+`
 
 func (m WizardModel) viewWelcome() string {
 	var b strings.Builder
 
+	versionStr := ""
+	if m.version != "" {
+		versionStr = " — " + m.version
+	}
+
 	b.WriteString(boxStyle.Render(
-		titleStyle.Render("Ancora Setup") + "\n\n" +
+		bannerStyle.Render(asciiBanner) + "\n\n" +
+			titleStyle.Render("Ancora Setup"+versionStr) + "\n\n" +
 			"Welcome to Ancora Memory System\n\n" +
 			"This wizard will configure:\n" +
 			"• Database (already set up ✓)\n" +
@@ -442,14 +484,23 @@ func (m WizardModel) viewInstallLlamaCpp() string {
 func (m WizardModel) viewPluginChoice() string {
 	var b strings.Builder
 
+	items := []string{"OpenCode", "Claude Code", "Skip"}
+	selected := m.pluginChoiceIndex
+
+	var itemsStr strings.Builder
+	for i, item := range items {
+		if i == selected {
+			itemsStr.WriteString("  ▶ " + item + "\n")
+		} else {
+			itemsStr.WriteString("    " + item + "\n")
+		}
+	}
+
 	content := titleStyle.Render("Plugin Installation") + "\n\n" +
 		"Install Ancora plugin for your AI agent?\n\n" +
-		"Available plugins:\n" +
-		"  [1] OpenCode\n" +
-		"  [2] Claude Code\n" +
-		"  [3] Skip\n\n" +
+		itemsStr.String() +
 		"This enables persistent memory across sessions.\n\n" +
-		hintStyle.Render("[1/2/3 to choose, q = quit]")
+		hintStyle.Render("[↑/↓ to select, Enter to confirm, q = quit]")
 
 	b.WriteString(boxStyle.Render(content))
 	return b.String()
