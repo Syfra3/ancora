@@ -203,8 +203,8 @@ func TestRunBackfillUsesEmbeddingsForSemanticRetrieval(t *testing.T) {
 		Type:      "decision",
 		Title:     "Database query tuning",
 		Content:   "Database indexes made the slow query fast.",
-		Project:   "searchproj",
-		Scope:     "project",
+		Workspace:   "searchproj",
+		Visibility:     "project",
 	}); err != nil {
 		t.Fatalf("AddObservation database: %v", err)
 	}
@@ -213,8 +213,8 @@ func TestRunBackfillUsesEmbeddingsForSemanticRetrieval(t *testing.T) {
 		Type:      "decision",
 		Title:     "Frontend button polish",
 		Content:   "React UI cleanup for the settings button.",
-		Project:   "searchproj",
-		Scope:     "project",
+		Workspace:   "searchproj",
+		Visibility:     "project",
 	}); err != nil {
 		t.Fatalf("AddObservation frontend: %v", err)
 	}

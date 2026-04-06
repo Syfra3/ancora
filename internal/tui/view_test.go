@@ -151,9 +151,9 @@ func TestViewMoveObservation(t *testing.T) {
 		m.Screen = ScreenMoveObservation
 		m.MoveObservationID = 42
 		m.SelectedObservation = &store.Observation{
-			ID:      42,
-			Project: &project,
-			Scope:   "project",
+			ID:         42,
+			Workspace:  &project,
+			Visibility: "project",
 		}
 		m.MoveScopeCursor = 0
 		m.MoveProjectList = []string{"syfra", "engram", "ancora"}
@@ -186,7 +186,7 @@ func TestViewMoveObservation(t *testing.T) {
 		m := New(nil, "")
 		m.Screen = ScreenMoveObservation
 		m.MoveObservationID = 42
-		m.SelectedObservation = &store.Observation{ID: 42, Project: &project, Scope: "project"}
+		m.SelectedObservation = &store.Observation{ID: 42, Workspace: &project, Visibility: "project"}
 		m.MoveScopeCursor = 0
 		m.MoveProjectList = []string{"syfra", "engram"}
 		m.MoveActiveColumn = "scope"
@@ -202,7 +202,7 @@ func TestViewMoveObservation(t *testing.T) {
 		m := New(nil, "")
 		m.Screen = ScreenMoveObservation
 		m.MoveObservationID = 42
-		m.SelectedObservation = &store.Observation{ID: 42, Project: &project, Scope: "project"}
+		m.SelectedObservation = &store.Observation{ID: 42, Workspace: &project, Visibility: "project"}
 		m.MoveScopeCursor = 1
 		m.MoveProjectList = []string{"syfra", "engram"}
 		m.MoveActiveColumn = "scope"
@@ -218,7 +218,7 @@ func TestViewMoveObservation(t *testing.T) {
 		m := New(nil, "")
 		m.Screen = ScreenMoveObservation
 		m.MoveObservationID = 42
-		m.SelectedObservation = &store.Observation{ID: 42, Project: &project, Scope: "project"}
+		m.SelectedObservation = &store.Observation{ID: 42, Workspace: &project, Visibility: "project"}
 		m.MoveError = "scope change failed"
 		m.MoveProjectList = []string{"syfra", "engram"}
 		m.MoveActiveColumn = "project"
@@ -234,7 +234,7 @@ func TestViewMoveObservation(t *testing.T) {
 		m := New(nil, "")
 		m.Screen = ScreenMoveObservation
 		m.MoveObservationID = 42
-		m.SelectedObservation = &store.Observation{ID: 42, Project: &project, Scope: "project"}
+		m.SelectedObservation = &store.Observation{ID: 42, Workspace: &project, Visibility: "project"}
 		m.MoveDone = true
 		m.MoveProjectList = []string{"syfra", "engram"}
 		m.MoveActiveColumn = "project"
@@ -356,7 +356,7 @@ func TestViewObservationDetailTimelineSessionsAndSessionDetail(t *testing.T) {
 		SessionID: "session-1",
 		CreatedAt: "2026-01-01",
 		ToolName:  &tool,
-		Project:   &project,
+		Workspace: &project,
 		Content:   strings.Repeat("line\n", 20),
 	}
 	m.DetailScroll = 99
@@ -394,13 +394,13 @@ func TestViewObservationDetailTimelineSessionsAndSessionDetail(t *testing.T) {
 	summary := "session summary"
 	m.Height = 14
 	m.Sessions = []store.SessionSummary{
-		{ID: "s1", Project: "engram", StartedAt: "2026-01-01", Summary: &summary, ObservationCount: 2},
-		{ID: "s2", Project: "engram", StartedAt: "2026-01-02", ObservationCount: 1},
-		{ID: "s3", Project: "engram", StartedAt: "2026-01-03", ObservationCount: 1},
-		{ID: "s4", Project: "engram", StartedAt: "2026-01-04", ObservationCount: 1},
-		{ID: "s5", Project: "engram", StartedAt: "2026-01-05", ObservationCount: 1},
-		{ID: "s6", Project: "engram", StartedAt: "2026-01-06", ObservationCount: 1},
-		{ID: "s7", Project: "engram", StartedAt: "2026-01-07", ObservationCount: 1},
+		{ID: "s1", Workspace: "engram", StartedAt: "2026-01-01", Summary: &summary, ObservationCount: 2},
+		{ID: "s2", Workspace: "engram", StartedAt: "2026-01-02", ObservationCount: 1},
+		{ID: "s3", Workspace: "engram", StartedAt: "2026-01-03", ObservationCount: 1},
+		{ID: "s4", Workspace: "engram", StartedAt: "2026-01-04", ObservationCount: 1},
+		{ID: "s5", Workspace: "engram", StartedAt: "2026-01-05", ObservationCount: 1},
+		{ID: "s6", Workspace: "engram", StartedAt: "2026-01-06", ObservationCount: 1},
+		{ID: "s7", Workspace: "engram", StartedAt: "2026-01-07", ObservationCount: 1},
 	}
 	out = m.viewSessions()
 	if !strings.Contains(out, "Sessions") || !strings.Contains(out, "showing 1-5 of 7") {
@@ -449,7 +449,7 @@ func TestViewRouterCoversAllScreens(t *testing.T) {
 	m.RecentObservations = []store.Observation{{ID: 1, Type: "bugfix", Title: "t", Content: "c", CreatedAt: "now"}}
 	m.SelectedObservation = &store.Observation{ID: 1, Type: "bugfix", Title: "t", Content: "c", CreatedAt: "now", SessionID: "s1"}
 	m.Timeline = &store.TimelineResult{Focus: store.Observation{ID: 1, Type: "bugfix", Title: "t", Content: "c"}, TotalInRange: 1}
-	m.Sessions = []store.SessionSummary{{ID: "s1", Project: "engram", StartedAt: "now", ObservationCount: 1}}
+	m.Sessions = []store.SessionSummary{{ID: "test", Project: "engram", StartedAt: "now", ObservationCount: 1}}
 	m.SelectedSessionIdx = 0
 	m.SessionObservations = []store.Observation{{ID: 1, Type: "bugfix", Title: "t", Content: "c", CreatedAt: "now"}}
 	m.SetupAgents = []setup.Agent{{Name: "opencode", Description: "OpenCode", InstallDir: "/tmp"}}

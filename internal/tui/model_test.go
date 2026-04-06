@@ -44,8 +44,8 @@ func newTestFixture(t *testing.T) testFixture {
 		Type:      "bugfix",
 		Title:     "Needle observation",
 		Content:   "needle content for deterministic search",
-		Project:   "engram",
-		Scope:     "project",
+		Workspace:   "engram",
+		Visibility:     "project",
 	})
 	if err != nil {
 		t.Fatalf("add first observation: %v", err)
@@ -56,8 +56,8 @@ func newTestFixture(t *testing.T) testFixture {
 		Type:      "decision",
 		Title:     "Second observation",
 		Content:   "timeline sibling",
-		Project:   "engram",
-		Scope:     "project",
+		Workspace:   "engram",
+		Visibility:     "project",
 	})
 	if err != nil {
 		t.Fatalf("add second observation: %v", err)

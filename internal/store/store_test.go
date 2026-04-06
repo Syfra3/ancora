@@ -73,24 +73,24 @@ func TestAddObservationDeduplicatesWithinWindow(t *testing.T) {
 	}
 
 	firstID, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "bugfix",
-		Title:     "Fixed tokenizer",
-		Content:   "Normalized tokenizer panic on edge case",
-		Project:   "engram",
-		Scope:     "project",
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "Fixed tokenizer",
+		Content:    "Normalized tokenizer panic on edge case",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add first observation: %v", err)
 	}
 
 	secondID, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "bugfix",
-		Title:     "Fixed tokenizer",
-		Content:   "normalized   tokenizer panic on EDGE case",
-		Project:   "engram",
-		Scope:     "project",
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "Fixed tokenizer",
+		Content:    "normalized   tokenizer panic on EDGE case",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add duplicate observation: %v", err)
@@ -117,30 +117,30 @@ func TestScopeFiltersSearchAndContext(t *testing.T) {
 	}
 
 	_, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "decision",
-		Title:     "Project auth",
-		Content:   "Keep auth middleware in project memory",
-		Project:   "engram",
-		Scope:     "project",
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "Project auth",
+		Content:    "Keep auth middleware in project memory",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add project observation: %v", err)
 	}
 
 	_, err = s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "decision",
-		Title:     "Personal note",
-		Content:   "Use this regex trick later",
-		Project:   "engram",
-		Scope:     "personal",
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "Personal note",
+		Content:    "Use this regex trick later",
+		Workspace:  "engram",
+		Visibility: "personal",
 	})
 	if err != nil {
 		t.Fatalf("add personal observation: %v", err)
 	}
 
-	projectResults, err := s.Search("regex", SearchOptions{Project: "engram", Scope: "project", Limit: 10})
+	projectResults, err := s.Search("regex", SearchOptions{Workspace: "engram", Visibility: "project", Limit: 10})
 	if err != nil {
 		t.Fatalf("search project scope: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestScopeFiltersSearchAndContext(t *testing.T) {
 		t.Fatalf("expected no project-scope regex results, got %d", len(projectResults))
 	}
 
-	personalResults, err := s.Search("regex", SearchOptions{Project: "engram", Scope: "personal", Limit: 10})
+	personalResults, err := s.Search("regex", SearchOptions{Workspace: "engram", Visibility: "personal", Limit: 10})
 	if err != nil {
 		t.Fatalf("search personal scope: %v", err)
 	}
@@ -176,36 +176,36 @@ func TestUpdateAndSoftDeleteExcludedFromSearchAndTimeline(t *testing.T) {
 	}
 
 	firstID, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "bugfix",
-		Title:     "first",
-		Content:   "first event",
-		Project:   "engram",
-		Scope:     "project",
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "first",
+		Content:    "first event",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add first: %v", err)
 	}
 
 	middleID, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "bugfix",
-		Title:     "middle",
-		Content:   "to be deleted",
-		Project:   "engram",
-		Scope:     "project",
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "middle",
+		Content:    "to be deleted",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add middle: %v", err)
 	}
 
 	lastID, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "bugfix",
-		Title:     "last",
-		Content:   "last event",
-		Project:   "engram",
-		Scope:     "project",
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "last",
+		Content:    "last event",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add last: %v", err)
@@ -215,15 +215,15 @@ func TestUpdateAndSoftDeleteExcludedFromSearchAndTimeline(t *testing.T) {
 	newContent := "updated content"
 	newScope := "personal"
 	updated, err := s.UpdateObservation(lastID, UpdateObservationParams{
-		Title:   &newTitle,
-		Content: &newContent,
-		Scope:   &newScope,
+		Title:      &newTitle,
+		Content:    &newContent,
+		Visibility: &newScope,
 	})
 	if err != nil {
 		t.Fatalf("update observation: %v", err)
 	}
-	if updated.Title != newTitle || updated.Scope != "personal" {
-		t.Fatalf("update did not apply; got title=%q scope=%q", updated.Title, updated.Scope)
+	if updated.Title != newTitle || updated.Visibility != "personal" {
+		t.Fatalf("update did not apply; got title=%q scope=%q", updated.Title, updated.Visibility)
 	}
 
 	if err := s.DeleteObservation(middleID, false); err != nil {
@@ -234,7 +234,7 @@ func TestUpdateAndSoftDeleteExcludedFromSearchAndTimeline(t *testing.T) {
 		t.Fatalf("expected deleted observation to be hidden from GetObservation")
 	}
 
-	searchResults, err := s.Search("deleted", SearchOptions{Project: "engram", Limit: 10})
+	searchResults, err := s.Search("deleted", SearchOptions{Workspace: "engram", Limit: 10})
 	if err != nil {
 		t.Fatalf("search after delete: %v", err)
 	}
@@ -266,26 +266,26 @@ func TestTopicKeyUpsertUpdatesSameTopicWithoutCreatingNewRow(t *testing.T) {
 	}
 
 	firstID, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "architecture",
-		Title:     "Auth architecture",
-		Content:   "Use middleware for JWT validation.",
-		Project:   "engram",
-		Scope:     "project",
-		TopicKey:  "architecture auth model",
+		SessionID:  "s1",
+		Type:       "architecture",
+		Title:      "Auth architecture",
+		Content:    "Use middleware for JWT validation.",
+		Workspace:  "engram",
+		Visibility: "project",
+		TopicKey:   "architecture auth model",
 	})
 	if err != nil {
 		t.Fatalf("add first architecture: %v", err)
 	}
 
 	secondID, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "architecture",
-		Title:     "Auth architecture",
-		Content:   "Move auth to gateway + middleware chain.",
-		Project:   "engram",
-		Scope:     "project",
-		TopicKey:  "ARCHITECTURE   AUTH  MODEL",
+		SessionID:  "s1",
+		Type:       "architecture",
+		Title:      "Auth architecture",
+		Content:    "Move auth to gateway + middleware chain.",
+		Workspace:  "engram",
+		Visibility: "project",
+		TopicKey:   "ARCHITECTURE   AUTH  MODEL",
 	})
 	if err != nil {
 		t.Fatalf("upsert architecture: %v", err)
@@ -318,26 +318,26 @@ func TestDifferentTopicsDoNotReplaceEachOther(t *testing.T) {
 	}
 
 	archID, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "architecture",
-		Title:     "Auth architecture",
-		Content:   "Architecture decision",
-		Project:   "engram",
-		Scope:     "project",
-		TopicKey:  "architecture/auth",
+		SessionID:  "s1",
+		Type:       "architecture",
+		Title:      "Auth architecture",
+		Content:    "Architecture decision",
+		Workspace:  "engram",
+		Visibility: "project",
+		TopicKey:   "architecture/auth",
 	})
 	if err != nil {
 		t.Fatalf("add architecture observation: %v", err)
 	}
 
 	bugID, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "bugfix",
-		Title:     "Fix auth nil panic",
-		Content:   "Bugfix details",
-		Project:   "engram",
-		Scope:     "project",
-		TopicKey:  "bug/auth-nil-panic",
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "Fix auth nil panic",
+		Content:    "Bugfix details",
+		Workspace:  "engram",
+		Visibility: "project",
+		TopicKey:   "bug/auth-nil-panic",
 	})
 	if err != nil {
 		t.Fatalf("add bug observation: %v", err)
@@ -427,7 +427,7 @@ func TestNewMigratesLegacyObservationIDSchema(t *testing.T) {
 		seen[o.ID] = true
 	}
 
-	results, err := s.Search("legacy", SearchOptions{Project: "engram", Limit: 10})
+	results, err := s.Search("legacy", SearchOptions{Workspace: "engram", Limit: 10})
 	if err != nil {
 		t.Fatalf("search after migration: %v", err)
 	}
@@ -436,12 +436,12 @@ func TestNewMigratesLegacyObservationIDSchema(t *testing.T) {
 	}
 
 	newID, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "bugfix",
-		Title:     "post migration",
-		Content:   "new row should get id",
-		Project:   "engram",
-		Scope:     "project",
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "post migration",
+		Content:    "new row should get id",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add observation after migration: %v", err)
@@ -572,39 +572,39 @@ func TestTopicKeyUpsertIsScopedByProjectAndScope(t *testing.T) {
 	}
 
 	baseID, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "architecture",
-		Title:     "Auth model",
-		Content:   "Initial architecture",
-		Project:   "engram",
-		Scope:     "project",
-		TopicKey:  "architecture/auth-model",
+		SessionID:  "s1",
+		Type:       "architecture",
+		Title:      "Auth model",
+		Content:    "Initial architecture",
+		Workspace:  "engram",
+		Visibility: "project",
+		TopicKey:   "architecture/auth-model",
 	})
 	if err != nil {
 		t.Fatalf("add base observation: %v", err)
 	}
 
 	personalID, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "architecture",
-		Title:     "Auth model",
-		Content:   "Personal take",
-		Project:   "engram",
-		Scope:     "personal",
-		TopicKey:  "architecture/auth-model",
+		SessionID:  "s1",
+		Type:       "architecture",
+		Title:      "Auth model",
+		Content:    "Personal take",
+		Workspace:  "engram",
+		Visibility: "personal",
+		TopicKey:   "architecture/auth-model",
 	})
 	if err != nil {
 		t.Fatalf("add personal scoped observation: %v", err)
 	}
 
 	otherProjectID, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "architecture",
-		Title:     "Auth model",
-		Content:   "Other project",
-		Project:   "another-project",
-		Scope:     "project",
-		TopicKey:  "architecture/auth-model",
+		SessionID:  "s1",
+		Type:       "architecture",
+		Title:      "Auth model",
+		Content:    "Other project",
+		Workspace:  "another-project",
+		Visibility: "project",
+		TopicKey:   "architecture/auth-model",
 	})
 	if err != nil {
 		t.Fatalf("add other project observation: %v", err)
@@ -815,7 +815,7 @@ func TestPassiveCaptureStoresLearnings(t *testing.T) {
 	result, err := s.PassiveCapture(PassiveCaptureParams{
 		SessionID: "s1",
 		Content:   text,
-		Project:   "engram",
+		Workspace: "engram",
 		Source:    "test",
 	})
 	if err != nil {
@@ -855,7 +855,7 @@ func TestPassiveCaptureEmptyContent(t *testing.T) {
 	result, err := s.PassiveCapture(PassiveCaptureParams{
 		SessionID: "s1",
 		Content:   "",
-		Project:   "engram",
+		Workspace: "engram",
 		Source:    "test",
 	})
 	if err != nil {
@@ -875,12 +875,12 @@ func TestPassiveCaptureDedupesAgainstExistingObservations(t *testing.T) {
 
 	// First: agent saves actively via mem_save
 	_, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "decision",
-		Title:     "bcrypt cost",
-		Content:   "bcrypt cost=12 is the right balance for our server performance",
-		Project:   "engram",
-		Scope:     "project",
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "bcrypt cost",
+		Content:    "bcrypt cost=12 is the right balance for our server performance",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add active observation: %v", err)
@@ -895,7 +895,7 @@ func TestPassiveCaptureDedupesAgainstExistingObservations(t *testing.T) {
 	result, err := s.PassiveCapture(PassiveCaptureParams{
 		SessionID: "s1",
 		Content:   text,
-		Project:   "engram",
+		Workspace: "engram",
 		Source:    "test",
 	})
 	if err != nil {
@@ -922,7 +922,7 @@ func TestPassiveCaptureReturnsErrorWhenSessionDoesNotExist(t *testing.T) {
 	_, err := s.PassiveCapture(PassiveCaptureParams{
 		SessionID: "missing-session",
 		Content:   text,
-		Project:   "engram",
+		Workspace: "engram",
 		Source:    "test",
 	})
 	if err == nil {
@@ -1018,19 +1018,19 @@ func TestSessionObservationsAddPromptImportAndSyncChunks(t *testing.T) {
 	}
 
 	_, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "decision",
-		Title:     "Auth",
-		Content:   "Use middleware chain",
-		Project:   "engram",
-		Scope:     "project",
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "Auth",
+		Content:    "Use middleware chain",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add observation: %v", err)
 	}
 
 	longPrompt := strings.Repeat("x", s.cfg.MaxObservationLength+25)
-	promptID, err := s.AddPrompt(AddPromptParams{SessionID: "s1", Content: longPrompt, Project: "engram"})
+	promptID, err := s.AddPrompt(AddPromptParams{SessionID: "test", Content: "test", Project: "engram"})
 	if err != nil {
 		t.Fatalf("add prompt: %v", err)
 	}
@@ -1092,12 +1092,12 @@ func TestStoreLocalSyncFoundationEnqueuesCoreMutations(t *testing.T) {
 	}
 
 	obsID, err := s.AddObservation(AddObservationParams{
-		SessionID: "sync-session",
-		Type:      "decision",
-		Title:     "Initial title",
-		Content:   "Initial content",
-		Project:   "engram",
-		Scope:     "project",
+		SessionID:  "sync-session",
+		Type:       "decision",
+		Title:      "Initial title",
+		Content:    "Initial content",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add observation: %v", err)
@@ -1119,7 +1119,7 @@ func TestStoreLocalSyncFoundationEnqueuesCoreMutations(t *testing.T) {
 	promptID, err := s.AddPrompt(AddPromptParams{
 		SessionID: "sync-session",
 		Content:   "How do we keep this local-first?",
-		Project:   "engram",
+		Workspace: "engram",
 	})
 	if err != nil {
 		t.Fatalf("add prompt: %v", err)
@@ -1436,7 +1436,7 @@ func TestEndSessionAndTimelineDefaults(t *testing.T) {
 		Type:      "note",
 		Title:     "first",
 		Content:   "first note",
-		Project:   "engram",
+		Workspace: "engram",
 	})
 	if err != nil {
 		t.Fatalf("add first observation: %v", err)
@@ -1446,7 +1446,7 @@ func TestEndSessionAndTimelineDefaults(t *testing.T) {
 		Type:      "note",
 		Title:     "second",
 		Content:   "second note",
-		Project:   "engram",
+		Workspace: "engram",
 	})
 	if err != nil {
 		t.Fatalf("add second observation: %v", err)
@@ -1525,12 +1525,12 @@ func TestStoreAdditionalQueryAndMutationBranches(t *testing.T) {
 
 	longContent := strings.Repeat("x", s.cfg.MaxObservationLength+100)
 	obsID, err := s.AddObservation(AddObservationParams{
-		SessionID: "s-q",
-		Type:      "note",
-		Title:     "Private <private>secret</private> title",
-		Content:   longContent + " <private>token</private>",
-		Project:   "engram",
-		Scope:     "project",
+		SessionID:  "s-q",
+		Type:       "note",
+		Title:      "Private <private>secret</private> title",
+		Content:    longContent + " <private>token</private>",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add observation: %v", err)
@@ -1548,21 +1548,21 @@ func TestStoreAdditionalQueryAndMutationBranches(t *testing.T) {
 
 	newProject := ""
 	newTopic := ""
-	updated, err := s.UpdateObservation(obsID, UpdateObservationParams{Project: &newProject, TopicKey: &newTopic})
+	updated, err := s.UpdateObservation(obsID, UpdateObservationParams{Workspace: &newProject, TopicKey: &newTopic})
 	if err != nil {
 		t.Fatalf("update observation: %v", err)
 	}
-	if updated.Project != nil {
+	if updated.Workspace != nil {
 		t.Fatalf("expected nil project after empty update")
 	}
 	if updated.TopicKey != nil {
 		t.Fatalf("expected nil topic key after empty update")
 	}
 
-	if _, err := s.AddPrompt(AddPromptParams{SessionID: "s-q", Content: "alpha prompt", Project: "alpha"}); err != nil {
+	if _, err := s.AddPrompt(AddPromptParams{SessionID: "test", Content: "test", Project: "alpha"}); err != nil {
 		t.Fatalf("add alpha prompt: %v", err)
 	}
-	if _, err := s.AddPrompt(AddPromptParams{SessionID: "s-q", Content: "beta prompt", Project: "beta"}); err != nil {
+	if _, err := s.AddPrompt(AddPromptParams{SessionID: "test", Content: "test", Project: "beta"}); err != nil {
 		t.Fatalf("add beta prompt: %v", err)
 	}
 
@@ -1582,7 +1582,7 @@ func TestStoreAdditionalQueryAndMutationBranches(t *testing.T) {
 		t.Fatalf("expected one alpha prompt search result, got %+v", searchPrompts)
 	}
 
-	searchResults, err := s.Search("title", SearchOptions{Scope: "project", Limit: 9999})
+	searchResults, err := s.Search("title", SearchOptions{Visibility: "project", Limit: 9999})
 	if err != nil {
 		t.Fatalf("search with clamped limit: %v", err)
 	}
@@ -1820,14 +1820,14 @@ func TestExportImportEdgeBranches(t *testing.T) {
 		s := newTestStore(t)
 		_, err := s.Import(&ExportData{
 			Observations: []Observation{{
-				ID:        1,
-				SessionID: "missing-session",
-				Type:      "bugfix",
-				Title:     "x",
-				Content:   "y",
-				Scope:     "project",
-				CreatedAt: Now(),
-				UpdatedAt: Now(),
+				ID:         1,
+				SessionID:  "missing-session",
+				Type:       "bugfix",
+				Title:      "x",
+				Content:    "y",
+				Visibility: "project",
+				CreatedAt:  Now(),
+				UpdatedAt:  Now(),
 			}},
 		})
 		if err == nil || !strings.Contains(err.Error(), "import observation") {
@@ -1842,7 +1842,7 @@ func TestExportImportEdgeBranches(t *testing.T) {
 				ID:        1,
 				SessionID: "missing-session",
 				Content:   "prompt",
-				Project:   "engram",
+				Workspace: "engram",
 				CreatedAt: Now(),
 			}},
 		})
@@ -2139,7 +2139,7 @@ func TestImportExportSeamErrors(t *testing.T) {
 			}
 			return origExec(db, query, args...)
 		}
-		if _, err := s.Import(&ExportData{Sessions: []Session{{ID: "s-x", Project: "p", Directory: "/tmp", StartedAt: Now()}}}); err == nil || !strings.Contains(err.Error(), "import session") {
+		if _, err := s.Import(&ExportData{Sessions: []Session{{ID: "test", Project: "p", Directory: "/tmp", StartedAt: Now()}}}); err == nil || !strings.Contains(err.Error(), "import session") {
 			t.Fatalf("expected session import error, got %v", err)
 		}
 
@@ -2205,10 +2205,10 @@ func TestHookFallbacksAndAdditionalBranches(t *testing.T) {
 		if err := s.CreateSession("s-q", "proj-b", "/tmp/proj-b"); err != nil {
 			t.Fatalf("create session proj-b: %v", err)
 		}
-		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-p", Type: "note", Title: "a", Content: "a", Project: "proj-a", Scope: "project"}); err != nil {
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-p", Type: "note", Title: "a", Content: "a", Workspace: "proj-a", Visibility: "project"}); err != nil {
 			t.Fatalf("add observation proj-a: %v", err)
 		}
-		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-q", Type: "note", Title: "b", Content: "b", Project: "proj-b", Scope: "project"}); err != nil {
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-q", Type: "note", Title: "b", Content: "b", Workspace: "proj-b", Visibility: "project"}); err != nil {
 			t.Fatalf("add observation proj-b: %v", err)
 		}
 
@@ -2267,15 +2267,15 @@ func TestHookFallbacksAndAdditionalBranches(t *testing.T) {
 			t.Fatalf("create session: %v", err)
 		}
 
-		firstID, err := s.AddObservation(AddObservationParams{SessionID: "s-tl", Type: "note", Title: "1", Content: "one", Project: "engram"})
+		firstID, err := s.AddObservation(AddObservationParams{SessionID: "s-tl", Type: "note", Title: "1", Content: "one", Workspace: "engram"})
 		if err != nil {
 			t.Fatalf("add first observation: %v", err)
 		}
-		middleID, err := s.AddObservation(AddObservationParams{SessionID: "s-tl", Type: "note", Title: "2", Content: "two", Project: "engram"})
+		middleID, err := s.AddObservation(AddObservationParams{SessionID: "s-tl", Type: "note", Title: "2", Content: "two", Workspace: "engram"})
 		if err != nil {
 			t.Fatalf("add middle observation: %v", err)
 		}
-		lastID, err := s.AddObservation(AddObservationParams{SessionID: "s-tl", Type: "note", Title: "3", Content: "three", Project: "engram"})
+		lastID, err := s.AddObservation(AddObservationParams{SessionID: "s-tl", Type: "note", Title: "3", Content: "three", Workspace: "engram"})
 		if err != nil {
 			t.Fatalf("add last observation: %v", err)
 		}
@@ -2424,7 +2424,7 @@ func TestStoreUncoveredBranchesPushToHundred(t *testing.T) {
 			t.Fatalf("create session: %v", err)
 		}
 
-		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "top", Content: "x", Project: "engram", TopicKey: "x"}); err != nil {
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "top", Content: "x", Workspace: "engram", TopicKey: "x"}); err != nil {
 			t.Fatalf("seed topic observation: %v", err)
 		}
 		origExec := s.hooks.exec
@@ -2434,12 +2434,12 @@ func TestStoreUncoveredBranchesPushToHundred(t *testing.T) {
 			}
 			return origExec(db, query, args...)
 		}
-		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "top", Content: "x", Project: "engram", TopicKey: "x"}); err == nil {
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "top", Content: "x", Workspace: "engram", TopicKey: "x"}); err == nil {
 			t.Fatalf("expected topic upsert exec error")
 		}
 
 		s.hooks = defaultStoreHooks()
-		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "dup", Content: "dup content", Project: "engram"}); err != nil {
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "dup", Content: "dup content", Workspace: "engram"}); err != nil {
 			t.Fatalf("seed dedupe observation: %v", err)
 		}
 		origExec = s.hooks.exec
@@ -2449,17 +2449,17 @@ func TestStoreUncoveredBranchesPushToHundred(t *testing.T) {
 			}
 			return origExec(db, query, args...)
 		}
-		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "dup", Content: "dup content", Project: "engram"}); err == nil {
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "dup", Content: "dup content", Workspace: "engram"}); err == nil {
 			t.Fatalf("expected dedupe exec error")
 		}
 
 		if err := s.Close(); err != nil {
 			t.Fatalf("close store: %v", err)
 		}
-		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "x", Content: "y", Project: "engram", TopicKey: "t"}); err == nil {
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "x", Content: "y", Workspace: "engram", TopicKey: "t"}); err == nil {
 			t.Fatalf("expected topic query error on closed db")
 		}
-		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "x", Content: "y", Project: "engram"}); err == nil {
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "x", Content: "y", Workspace: "engram"}); err == nil {
 			t.Fatalf("expected dedupe query error on closed db")
 		}
 		if _, err := s.AddPrompt(AddPromptParams{SessionID: "s-e", Content: "x"}); err == nil {
@@ -2472,7 +2472,7 @@ func TestStoreUncoveredBranchesPushToHundred(t *testing.T) {
 		if err := s.CreateSession("s-u", "engram", "/tmp/engram"); err != nil {
 			t.Fatalf("create session: %v", err)
 		}
-		id, err := s.AddObservation(AddObservationParams{SessionID: "s-u", Type: "old", Title: "t", Content: "c", Project: "engram", TopicKey: "topic/key"})
+		id, err := s.AddObservation(AddObservationParams{SessionID: "s-u", Type: "old", Title: "t", Content: "c", Workspace: "engram", TopicKey: "topic/key"})
 		if err != nil {
 			t.Fatalf("seed observation: %v", err)
 		}
@@ -2524,10 +2524,10 @@ func TestStoreUncoveredBranchesPushToHundred(t *testing.T) {
 		if err := s.CreateSession("s-iter", "engram", "/tmp/engram"); err != nil {
 			t.Fatalf("create session: %v", err)
 		}
-		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-iter", Type: "note", Title: "one", Content: "one", Project: "engram"}); err != nil {
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-iter", Type: "note", Title: "one", Content: "one", Workspace: "engram"}); err != nil {
 			t.Fatalf("add observation: %v", err)
 		}
-		if _, err := s.AddPrompt(AddPromptParams{SessionID: "s-iter", Content: "prompt", Project: "engram"}); err != nil {
+		if _, err := s.AddPrompt(AddPromptParams{SessionID: "test", Content: "test", Project: "engram"}); err != nil {
 			t.Fatalf("add prompt: %v", err)
 		}
 
@@ -2627,12 +2627,12 @@ func TestStoreUncoveredBranchesPushToHundred(t *testing.T) {
 		if err := s.CreateSession("s-t2", "engram", "/tmp/engram"); err != nil {
 			t.Fatalf("create session: %v", err)
 		}
-		first, _ := s.AddObservation(AddObservationParams{SessionID: "s-t2", Type: "decision", Title: "a", Content: "a", Project: "engram"})
-		_, _ = s.AddObservation(AddObservationParams{SessionID: "s-t2", Type: "decision", Title: "aa", Content: "aa", Project: "engram"})
-		focus, _ := s.AddObservation(AddObservationParams{SessionID: "s-t2", Type: "decision", Title: "b", Content: "b", Project: "engram"})
-		_, _ = s.AddObservation(AddObservationParams{SessionID: "s-t2", Type: "decision", Title: "c", Content: "c", Project: "engram"})
+		first, _ := s.AddObservation(AddObservationParams{SessionID: "s-t2", Type: "decision", Title: "a", Content: "a", Workspace: "engram"})
+		_, _ = s.AddObservation(AddObservationParams{SessionID: "s-t2", Type: "decision", Title: "aa", Content: "aa", Workspace: "engram"})
+		focus, _ := s.AddObservation(AddObservationParams{SessionID: "s-t2", Type: "decision", Title: "b", Content: "b", Workspace: "engram"})
+		_, _ = s.AddObservation(AddObservationParams{SessionID: "s-t2", Type: "decision", Title: "c", Content: "c", Workspace: "engram"})
 
-		if _, err := s.Search("b", SearchOptions{Type: "decision", Project: "engram", Scope: "project", Limit: 5}); err != nil {
+		if _, err := s.Search("b", SearchOptions{Type: "decision", Workspace: "engram", Visibility: "project", Limit: 5}); err != nil {
 			t.Fatalf("search with type filter: %v", err)
 		}
 
@@ -2712,7 +2712,7 @@ func TestStoreUncoveredBranchesPushToHundred(t *testing.T) {
 		if err := s.CreateSession("s-c", "engram", "/tmp/engram"); err != nil {
 			t.Fatalf("create session: %v", err)
 		}
-		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-c", Type: "note", Title: "n", Content: "n", Project: "engram"}); err != nil {
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-c", Type: "note", Title: "n", Content: "n", Workspace: "engram"}); err != nil {
 			t.Fatalf("add obs: %v", err)
 		}
 
@@ -3009,8 +3009,8 @@ func TestEnrollProjectBasic(t *testing.T) {
 	if len(projects) != 1 {
 		t.Fatalf("expected 1 enrolled project, got %d", len(projects))
 	}
-	if projects[0].Project != "engram" {
-		t.Fatalf("expected project 'engram', got %q", projects[0].Project)
+	if projects[0].Workspace != "engram" {
+		t.Fatalf("expected project 'engram', got %q", projects[0].Workspace)
 	}
 	if projects[0].EnrolledAt == "" {
 		t.Fatal("expected enrolled_at to be set")
@@ -3105,8 +3105,8 @@ func TestEnrollProjectBackfillsHistoricalMutations(t *testing.T) {
 		if mutation.EntityKey != entityKey {
 			t.Fatalf("expected entity_key %q for %s, got %q", entityKey, mutation.Entity, mutation.EntityKey)
 		}
-		if mutation.Project != "legacy-proj" {
-			t.Fatalf("expected project legacy-proj, got %q", mutation.Project)
+		if mutation.Workspace != "legacy-proj" {
+			t.Fatalf("expected project legacy-proj, got %q", mutation.Workspace)
 		}
 	}
 	state, err := s.GetSyncState(DefaultSyncTargetKey)
@@ -3499,12 +3499,12 @@ func TestListPendingSyncMutationsIncludesProject(t *testing.T) {
 	}
 
 	_, err := s.AddObservation(AddObservationParams{
-		SessionID: "proj-session",
-		Type:      "decision",
-		Title:     "Test obs",
-		Content:   "Content",
-		Project:   "my-project",
-		Scope:     "project",
+		SessionID:  "proj-session",
+		Type:       "decision",
+		Title:      "Test obs",
+		Content:    "Content",
+		Workspace:  "my-project",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add observation: %v", err)
@@ -3523,7 +3523,7 @@ func TestListPendingSyncMutationsIncludesProject(t *testing.T) {
 	// Phase 3: Verify the Project field is populated at enqueue time.
 	foundProject := false
 	for _, m := range mutations {
-		if m.Project == "my-project" {
+		if m.Workspace == "my-project" {
 			foundProject = true
 			break
 		}
@@ -3536,7 +3536,7 @@ func TestListPendingSyncMutationsIncludesProject(t *testing.T) {
 // ─── Phase 3: extractProjectFromPayload ──────────────────────────────────────
 
 func TestExtractProjectFromSessionPayload(t *testing.T) {
-	p := syncSessionPayload{ID: "s1", Project: "acme"}
+	p := syncSessionPayload{ID: "s1", Workspace: "acme"}
 	got := extractProjectFromPayload(p)
 	if got != "acme" {
 		t.Fatalf("expected 'acme', got %q", got)
@@ -3545,7 +3545,7 @@ func TestExtractProjectFromSessionPayload(t *testing.T) {
 
 func TestExtractProjectFromObservationPayload(t *testing.T) {
 	proj := "obs-project"
-	p := syncObservationPayload{SyncID: "obs-1", Project: &proj}
+	p := syncObservationPayload{SyncID: "obs-1", Workspace: &proj}
 	got := extractProjectFromPayload(p)
 	if got != "obs-project" {
 		t.Fatalf("expected 'obs-project', got %q", got)
@@ -3553,7 +3553,7 @@ func TestExtractProjectFromObservationPayload(t *testing.T) {
 }
 
 func TestExtractProjectFromObservationPayloadNil(t *testing.T) {
-	p := syncObservationPayload{SyncID: "obs-1", Project: nil}
+	p := syncObservationPayload{SyncID: "obs-1", Workspace: nil}
 	got := extractProjectFromPayload(p)
 	if got != "" {
 		t.Fatalf("expected empty string, got %q", got)
@@ -3562,7 +3562,7 @@ func TestExtractProjectFromObservationPayloadNil(t *testing.T) {
 
 func TestExtractProjectFromPromptPayload(t *testing.T) {
 	proj := "prompt-project"
-	p := syncPromptPayload{SyncID: "p1", Project: &proj}
+	p := syncPromptPayload{SyncID: "p1", Workspace: &proj}
 	got := extractProjectFromPayload(p)
 	if got != "prompt-project" {
 		t.Fatalf("expected 'prompt-project', got %q", got)
@@ -3570,7 +3570,7 @@ func TestExtractProjectFromPromptPayload(t *testing.T) {
 }
 
 func TestExtractProjectFromPromptPayloadNil(t *testing.T) {
-	p := syncPromptPayload{SyncID: "p1", Project: nil}
+	p := syncPromptPayload{SyncID: "p1", Workspace: nil}
 	got := extractProjectFromPayload(p)
 	if got != "" {
 		t.Fatalf("expected empty string, got %q", got)
@@ -3582,7 +3582,7 @@ func TestExtractProjectFromUnknownPayloadFallback(t *testing.T) {
 	p := struct {
 		Project string `json:"project"`
 		Other   string `json:"other"`
-	}{Project: "fallback-proj", Other: "x"}
+	}{Workspace: "fallback-proj", Other: "x"}
 	got := extractProjectFromPayload(p)
 	if got != "fallback-proj" {
 		t.Fatalf("expected 'fallback-proj', got %q", got)
@@ -3633,7 +3633,7 @@ func TestEnqueueSyncMutationPopulatesProjectFromObservationPayload(t *testing.T)
 		Type:      "decision",
 		Title:     "Test",
 		Content:   "Content",
-		Project:   "obs-proj",
+		Workspace: "obs-proj",
 	})
 	if err != nil {
 		t.Fatalf("add observation: %v", err)
@@ -3662,7 +3662,7 @@ func TestEnqueueSyncMutationPopulatesProjectFromPromptPayload(t *testing.T) {
 	_, err := s.AddPrompt(AddPromptParams{
 		SessionID: "prompt-enq",
 		Content:   "What did we do?",
-		Project:   "prompt-proj",
+		Workspace: "prompt-proj",
 	})
 	if err != nil {
 		t.Fatalf("add prompt: %v", err)
@@ -3705,14 +3705,14 @@ func TestListPendingFiltersNonEnrolledProjects(t *testing.T) {
 
 	// Only enrolled-proj mutations should appear.
 	for _, m := range mutations {
-		if m.Project == "other-proj" {
+		if m.Workspace == "other-proj" {
 			t.Fatalf("non-enrolled project 'other-proj' should not appear in pending mutations")
 		}
 	}
 
 	foundEnrolled := false
 	for _, m := range mutations {
-		if m.Project == "enrolled-proj" {
+		if m.Workspace == "enrolled-proj" {
 			foundEnrolled = true
 			break
 		}
@@ -3800,7 +3800,7 @@ func TestSkipAckPreservesEnrolledProjectMutations(t *testing.T) {
 		t.Fatalf("list pending: %v", err)
 	}
 	for _, m := range mutations {
-		if m.Project == "not-enrolled" {
+		if m.Workspace == "not-enrolled" {
 			t.Fatal("skip-acked mutation still appears as pending")
 		}
 	}
@@ -3831,8 +3831,8 @@ func TestEmptyProjectMutationsAlwaysSync(t *testing.T) {
 
 	// Verify they have project = ''.
 	for _, m := range mutations {
-		if m.Project != "" {
-			t.Fatalf("expected empty project, got %q", m.Project)
+		if m.Workspace != "" {
+			t.Fatalf("expected empty project, got %q", m.Workspace)
 		}
 	}
 }
@@ -3897,13 +3897,13 @@ func TestMixedEnrolledAndEmptyProjectMutations(t *testing.T) {
 	// Should have enrolled-mix and empty-project mutations, but NOT unenrolled-mix.
 	var hasEnrolled, hasGlobal bool
 	for _, m := range mutations {
-		if m.Project == "unenrolled-mix" {
+		if m.Workspace == "unenrolled-mix" {
 			t.Fatal("unenrolled project mutations should not appear")
 		}
-		if m.Project == "enrolled-mix" {
+		if m.Workspace == "enrolled-mix" {
 			hasEnrolled = true
 		}
-		if m.Project == "" {
+		if m.Workspace == "" {
 			hasGlobal = true
 		}
 	}
@@ -3944,12 +3944,12 @@ func TestPersonalScopeNeverEnqueued(t *testing.T) {
 
 	// Save a personal-scope observation under an enrolled project.
 	_, err = s.AddObservation(AddObservationParams{
-		SessionID: sessionID,
-		Type:      "manual",
-		Title:     "My budget plan",
-		Content:   "Personal finance notes",
-		Project:   "my-project",
-		Scope:     "personal",
+		SessionID:  sessionID,
+		Type:       "manual",
+		Title:      "My budget plan",
+		Content:    "Personal finance notes",
+		Workspace:  "my-project",
+		Visibility: "personal",
 	})
 	if err != nil {
 		t.Fatalf("add personal observation: %v", err)
@@ -3978,12 +3978,12 @@ func TestPersonalScopeUpdateNeverEnqueued(t *testing.T) {
 	}
 
 	id, err := s.AddObservation(AddObservationParams{
-		SessionID: sessionID,
-		Type:      "manual",
-		Title:     "Health goal",
-		Content:   "Run 5km per week",
-		Project:   "my-project",
-		Scope:     "personal",
+		SessionID:  sessionID,
+		Type:       "manual",
+		Title:      "Health goal",
+		Content:    "Run 5km per week",
+		Workspace:  "my-project",
+		Visibility: "personal",
 	})
 	if err != nil {
 		t.Fatalf("add personal observation: %v", err)
@@ -4035,12 +4035,12 @@ func TestProjectScopeEnqueuedWhenEnrolled(t *testing.T) {
 	}
 
 	_, err := s.AddObservation(AddObservationParams{
-		SessionID: sessionID,
-		Type:      "decision",
-		Title:     "Use clean architecture",
-		Content:   "Enforce layered boundaries",
-		Project:   "work-project",
-		Scope:     "project",
+		SessionID:  sessionID,
+		Type:       "decision",
+		Title:      "Use clean architecture",
+		Content:    "Enforce layered boundaries",
+		Workspace:  "work-project",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add project observation: %v", err)
@@ -4053,7 +4053,7 @@ func TestProjectScopeEnqueuedWhenEnrolled(t *testing.T) {
 
 	hasObsMutation := false
 	for _, m := range after {
-		if m.Entity == SyncEntityObservation && m.Project == "work-project" {
+		if m.Entity == SyncEntityObservation && m.Workspace == "work-project" {
 			hasObsMutation = true
 			break
 		}
@@ -4073,12 +4073,12 @@ func TestProjectScopeNotEnqueuedWhenNotEnrolled(t *testing.T) {
 	}
 
 	_, err := s.AddObservation(AddObservationParams{
-		SessionID: sessionID,
-		Type:      "manual",
-		Title:     "Side project note",
-		Content:   "Woodworking plans",
-		Project:   "side-project",
-		Scope:     "project",
+		SessionID:  sessionID,
+		Type:       "manual",
+		Title:      "Side project note",
+		Content:    "Woodworking plans",
+		Workspace:  "side-project",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add observation: %v", err)
@@ -4091,7 +4091,7 @@ func TestProjectScopeNotEnqueuedWhenNotEnrolled(t *testing.T) {
 		t.Fatalf("list pending: %v", err)
 	}
 	for _, m := range pending {
-		if m.Entity == SyncEntityObservation && m.Project == "side-project" {
+		if m.Entity == SyncEntityObservation && m.Workspace == "side-project" {
 			t.Fatal("unenrolled project observation must not appear in pending sync mutations")
 		}
 	}
@@ -4107,14 +4107,14 @@ func TestMigrateProject(t *testing.T) {
 	s.CreateSession("s1", old, "/tmp/old")
 	s.AddObservation(AddObservationParams{
 		SessionID: "s1", Type: "decision", Title: "test obs",
-		Content: "some content", Project: old, Scope: "project",
+		Content: "some content", Workspace: old, Visibility: "project",
 	})
-	s.AddPrompt(AddPromptParams{SessionID: "s1", Content: "test prompt", Project: old})
+	s.AddPrompt(AddPromptParams{SessionID: "test", Content: "test", Project: old})
 
 	// Run migration
 	result, err := s.MigrateProject(old, new_)
 	if err != nil {
-		t.Fatalf("MigrateProject: %v", err)
+		t.Fatalf("MigrateWorkspace: %v", err)
 	}
 	if !result.Migrated {
 		t.Fatal("expected migration to happen")
@@ -4142,7 +4142,7 @@ func TestMigrateProject(t *testing.T) {
 	}
 
 	// Verify FTS search finds it under new project
-	results, _ := s.Search("test obs", SearchOptions{Project: new_, Limit: 10})
+	results, _ := s.Search("test obs", SearchOptions{Workspace: new_, Limit: 10})
 	if len(results) != 1 {
 		t.Fatalf("expected FTS to find 1 result under new project, got %d", len(results))
 	}
@@ -4154,7 +4154,7 @@ func TestMigrateProjectNoOp(t *testing.T) {
 	// No records under "nonexistent" — should be a no-op
 	result, err := s.MigrateProject("nonexistent", "anything")
 	if err != nil {
-		t.Fatalf("MigrateProject: %v", err)
+		t.Fatalf("MigrateWorkspace: %v", err)
 	}
 	if result.Migrated {
 		t.Fatal("expected no migration for nonexistent project")
@@ -4168,13 +4168,13 @@ func TestMigrateProjectIdempotent(t *testing.T) {
 	s.CreateSession("s1", old, "/tmp")
 	s.AddObservation(AddObservationParams{
 		SessionID: "s1", Type: "decision", Title: "test",
-		Content: "content", Project: old, Scope: "project",
+		Content: "content", Workspace: old, Visibility: "project",
 	})
 
 	// First migration
 	r1, err := s.MigrateProject(old, new_)
 	if err != nil {
-		t.Fatalf("first MigrateProject: %v", err)
+		t.Fatalf("first MigrateWorkspace: %v", err)
 	}
 	if !r1.Migrated {
 		t.Fatal("first migration should migrate")
@@ -4183,7 +4183,7 @@ func TestMigrateProjectIdempotent(t *testing.T) {
 	// Second migration — no records under old name anymore
 	r2, err := s.MigrateProject(old, new_)
 	if err != nil {
-		t.Fatalf("second MigrateProject: %v", err)
+		t.Fatalf("second MigrateWorkspace: %v", err)
 	}
 	if r2.Migrated {
 		t.Fatal("second migration should be a no-op")
@@ -4235,12 +4235,12 @@ func TestAddObservationNormalizesProject(t *testing.T) {
 
 	// Save with mixed-case project name
 	id, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "decision",
-		Title:     "Normalize test",
-		Content:   "This should be stored under lowercase project",
-		Project:   "Engram",
-		Scope:     "project",
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "Normalize test",
+		Content:    "This should be stored under lowercase project",
+		Workspace:  "Engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("AddObservation: %v", err)
@@ -4252,10 +4252,10 @@ func TestAddObservationNormalizesProject(t *testing.T) {
 	}
 
 	// Stored project should be normalized to lowercase
-	if obs.Project == nil || *obs.Project != "engram" {
+	if obs.Workspace == nil || *obs.Workspace != "engram" {
 		got := "<nil>"
-		if obs.Project != nil {
-			got = *obs.Project
+		if obs.Workspace != nil {
+			got = *obs.Workspace
 		}
 		t.Errorf("stored project = %q, want \"engram\"", got)
 	}
@@ -4270,12 +4270,12 @@ func TestSearchNormalizesProjectFilter(t *testing.T) {
 
 	// Store observation under already-lowercase project
 	_, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "decision",
-		Title:     "Search normalize test",
-		Content:   "content for project filter normalization",
-		Project:   "engram",
-		Scope:     "project",
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "Search normalize test",
+		Content:    "content for project filter normalization",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("AddObservation: %v", err)
@@ -4283,8 +4283,8 @@ func TestSearchNormalizesProjectFilter(t *testing.T) {
 
 	// Search with UPPERCASE project filter — should still find the record
 	results, err := s.Search("normalize test", SearchOptions{
-		Project: "Engram", // intentionally mixed-case
-		Limit:   10,
+		Workspace: "Engram", // intentionally mixed-case
+		Limit:     10,
 	})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -4303,12 +4303,12 @@ func TestRecentObservationsNormalizesProjectFilter(t *testing.T) {
 	}
 
 	_, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "decision",
-		Title:     "Recent obs test",
-		Content:   "some content",
-		Project:   "engram",
-		Scope:     "project",
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "Recent obs test",
+		Content:    "some content",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("AddObservation: %v", err)
@@ -4352,12 +4352,12 @@ func TestListProjectNames(t *testing.T) {
 
 	for _, proj := range []string{"alpha", "alpha", "beta", "gamma"} {
 		_, err := s.AddObservation(AddObservationParams{
-			SessionID: "s1",
-			Type:      "decision",
-			Title:     "test " + proj,
-			Content:   "content for " + proj,
-			Project:   proj,
-			Scope:     "project",
+			SessionID:  "s1",
+			Type:       "decision",
+			Title:      "test " + proj,
+			Content:    "content for " + proj,
+			Workspace:  proj,
+			Visibility: "project",
 		})
 		if err != nil {
 			t.Fatalf("AddObservation: %v", err)
@@ -4395,12 +4395,12 @@ func TestListProjectsWithStats(t *testing.T) {
 	// Add 3 observations to proj-a
 	for i := 0; i < 3; i++ {
 		_, err := s.AddObservation(AddObservationParams{
-			SessionID: "s1",
-			Type:      "decision",
-			Title:     "obs a",
-			Content:   strings.Repeat("x", i+1), // unique content per obs
-			Project:   "proj-a",
-			Scope:     "project",
+			SessionID:  "s1",
+			Type:       "decision",
+			Title:      "obs a",
+			Content:    strings.Repeat("x", i+1), // unique content per obs
+			Workspace:  "proj-a",
+			Visibility: "project",
 		})
 		if err != nil {
 			t.Fatalf("AddObservation proj-a: %v", err)
@@ -4409,12 +4409,12 @@ func TestListProjectsWithStats(t *testing.T) {
 
 	// Add 1 observation to proj-b
 	_, err := s.AddObservation(AddObservationParams{
-		SessionID: "s2",
-		Type:      "decision",
-		Title:     "obs b",
-		Content:   "content for proj-b",
-		Project:   "proj-b",
-		Scope:     "project",
+		SessionID:  "s2",
+		Type:       "decision",
+		Title:      "obs b",
+		Content:    "content for proj-b",
+		Workspace:  "proj-b",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("AddObservation proj-b: %v", err)
@@ -4475,12 +4475,12 @@ func TestMergeProjects(t *testing.T) {
 	for _, src := range []string{"engram", "engram-memory"} {
 		for i := 0; i < 2; i++ {
 			_, err := s.AddObservation(AddObservationParams{
-				SessionID: "s1",
-				Type:      "decision",
-				Title:     "obs from " + src,
-				Content:   strings.Repeat(src, i+1),
-				Project:   src,
-				Scope:     "project",
+				SessionID:  "s1",
+				Type:       "decision",
+				Title:      "obs from " + src,
+				Content:    strings.Repeat(src, i+1),
+				Workspace:  src,
+				Visibility: "project",
 			})
 			if err != nil {
 				t.Fatalf("AddObservation %s: %v", src, err)
@@ -4548,12 +4548,12 @@ func TestMergeProjectsCanonicalInSources(t *testing.T) {
 
 	// Put some obs under "engram"
 	_, err := s.AddObservation(AddObservationParams{
-		SessionID: "s1",
-		Type:      "decision",
-		Title:     "existing",
-		Content:   "existing observation",
-		Project:   "engram",
-		Scope:     "project",
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "existing",
+		Content:    "existing observation",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("AddObservation: %v", err)
@@ -4584,7 +4584,7 @@ func TestCountObservationsForProject(t *testing.T) {
 	// No observations yet — count should be 0
 	count, err := s.CountObservationsForProject("alpha")
 	if err != nil {
-		t.Fatalf("CountObservationsForProject: %v", err)
+		t.Fatalf("CountObservationsForWorkspace: %v", err)
 	}
 	if count != 0 {
 		t.Errorf("expected 0, got %d", count)
@@ -4593,12 +4593,12 @@ func TestCountObservationsForProject(t *testing.T) {
 	// Add two observations
 	for i := 0; i < 2; i++ {
 		if _, err := s.AddObservation(AddObservationParams{
-			SessionID: "s1",
-			Type:      "decision",
-			Title:     "obs " + string(rune('A'+i)),
-			Content:   "unique content that is definitely unique " + string(rune('A'+i)),
-			Project:   "alpha",
-			Scope:     "project",
+			SessionID:  "s1",
+			Type:       "decision",
+			Title:      "obs " + string(rune('A'+i)),
+			Content:    "unique content that is definitely unique " + string(rune('A'+i)),
+			Workspace:  "alpha",
+			Visibility: "project",
 		}); err != nil {
 			t.Fatalf("AddObservation: %v", err)
 		}
@@ -4606,7 +4606,7 @@ func TestCountObservationsForProject(t *testing.T) {
 
 	count, err = s.CountObservationsForProject("alpha")
 	if err != nil {
-		t.Fatalf("CountObservationsForProject: %v", err)
+		t.Fatalf("CountObservationsForWorkspace: %v", err)
 	}
 	if count != 2 {
 		t.Errorf("expected 2, got %d", count)
@@ -4635,24 +4635,24 @@ func TestSetEmbeddingAndSearchSemantic(t *testing.T) {
 
 	// Add two observations.
 	id1, err := s.AddObservation(AddObservationParams{
-		SessionID: sessID,
-		Type:      "decision",
-		Title:     "Use Go for backend",
-		Content:   "We decided to use Go for its concurrency model",
-		Project:   "testproj",
-		Scope:     "project",
+		SessionID:  sessID,
+		Type:       "decision",
+		Title:      "Use Go for backend",
+		Content:    "We decided to use Go for its concurrency model",
+		Workspace:  "testproj",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("AddObservation 1: %v", err)
 	}
 
 	id2, err := s.AddObservation(AddObservationParams{
-		SessionID: sessID,
-		Type:      "decision",
-		Title:     "Use TypeScript for frontend",
-		Content:   "We chose TypeScript for type safety",
-		Project:   "testproj",
-		Scope:     "project",
+		SessionID:  sessID,
+		Type:       "decision",
+		Title:      "Use TypeScript for frontend",
+		Content:    "We chose TypeScript for type safety",
+		Workspace:  "testproj",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("AddObservation 2: %v", err)
@@ -4796,7 +4796,7 @@ func TestMigrateToNewSchema(t *testing.T) {
 	var results []result
 	for rows.Next() {
 		var r result
-		if err := rows.Scan(&r.Title, &r.Project, &r.Scope, &r.Workspace, &r.Visibility, &r.Organization); err != nil {
+		if err := rows.Scan(&r.Title, &r.Workspace, &r.Visibility, &r.Workspace, &r.Visibility, &r.Organization); err != nil {
 			t.Fatalf("scan row: %v", err)
 		}
 		results = append(results, r)

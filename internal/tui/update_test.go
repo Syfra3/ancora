@@ -673,7 +673,7 @@ func TestObservationDetailMoveKeys(t *testing.T) {
 	proj := "engram"
 	m := New(fx.store, "")
 	m.Screen = ScreenObservationDetail
-	m.SelectedObservation = &store.Observation{ID: fx.obsID, Project: &proj, Scope: "project"}
+	m.SelectedObservation = &store.Observation{ID: fx.obsID, Workspace: &proj, Visibility: "project"}
 	m.PrevScreen = ScreenRecent
 
 	updatedModel, cmd := m.handleObservationDetailKeys("m")

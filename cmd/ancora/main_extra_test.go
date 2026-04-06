@@ -683,7 +683,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 		storeTimeline = func(*store.Store, int64, int, int) (*store.TimelineResult, error) {
 			return &store.TimelineResult{
 				Focus:        store.Observation{ID: 1, Type: "note", Title: "focus", Content: "content", CreatedAt: "2026-01-01"},
-				SessionInfo:  &store.Session{Project: "proj", StartedAt: "2026-01-01", Summary: &summary},
+				SessionInfo:  &store.Session{ID: "test", Project: "proj", StartedAt: "2026-01-01", Summary: &summary},
 				TotalInRange: 1,
 			}, nil
 		}

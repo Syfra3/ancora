@@ -145,8 +145,8 @@ func TestSearchWithOptionsWithoutProjectSearchesAllProjects(t *testing.T) {
 		}
 	}
 	for _, obs := range []store.AddObservationParams{
-		{SessionID: "s-alpha", Type: "decision", Title: "Alpha hit", Content: "shared-search-term alpha", Project: "alpha", Scope: "project"},
-		{SessionID: "s-beta", Type: "decision", Title: "Beta hit", Content: "shared-search-term beta", Project: "beta", Scope: "project"},
+		{SessionID: "s-alpha", Type: "decision", Title: "Alpha hit", Content: "shared-search-term alpha", Workspace: "alpha", Visibility: "project"},
+		{SessionID: "s-beta", Type: "decision", Title: "Beta hit", Content: "shared-search-term beta", Workspace: "beta", Visibility: "project"},
 	} {
 		if _, err := s.AddObservation(obs); err != nil {
 			t.Fatalf("AddObservation %q: %v", obs.Title, err)
@@ -184,8 +184,8 @@ func TestSearchWithOptionsHybridHonorsExplicitProjectFilter(t *testing.T) {
 		Type:      "decision",
 		Title:     "Alpha semantic hit",
 		Content:   "shared semantic token",
-		Project:   "alpha",
-		Scope:     "project",
+		Workspace:   "alpha",
+		Visibility:     "project",
 	})
 	if err != nil {
 		t.Fatalf("add alpha observation: %v", err)
@@ -195,8 +195,8 @@ func TestSearchWithOptionsHybridHonorsExplicitProjectFilter(t *testing.T) {
 		Type:      "decision",
 		Title:     "Beta semantic hit",
 		Content:   "shared semantic token",
-		Project:   "beta",
-		Scope:     "project",
+		Workspace:   "beta",
+		Visibility:     "project",
 	})
 	if err != nil {
 		t.Fatalf("add beta observation: %v", err)
@@ -210,7 +210,7 @@ func TestSearchWithOptionsHybridHonorsExplicitProjectFilter(t *testing.T) {
 		t.Fatalf("set beta embedding: %v", err)
 	}
 
-	results, mode, err := SearchWithOptions("shared semantic token", store.SearchOptions{Project: "alpha", Limit: 10}, stubEmbedder{vec: vec}, s)
+	results, mode, err := SearchWithOptions("shared semantic token", store.SearchOptions{Workspace: "alpha", Limit: 10}, stubEmbedder{vec: vec}, s)
 	if err != nil {
 		t.Fatalf("SearchWithOptions: %v", err)
 	}

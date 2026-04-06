@@ -39,8 +39,8 @@ func TestIntegrationSaveEmbedHybridSearch(t *testing.T) {
 		Type:      "decision",
 		Title:     "Chose Go for local client",
 		Content:   "Go compiles to a single binary with no runtime dependencies, ideal for CLI tools.",
-		Project:   "integ-project",
-		Scope:     "project",
+		Workspace:   "integ-project",
+		Visibility:     "project",
 	})
 	if err != nil {
 		t.Fatalf("AddObservation: %v", err)

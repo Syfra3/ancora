@@ -110,8 +110,8 @@ func mustSeedObservation(t *testing.T, cfg store.Config, sessionID, project, typ
 		Type:      typ,
 		Title:     title,
 		Content:   content,
-		Project:   project,
-		Scope:     scope,
+		Workspace:   project,
+		Visibility:     scope,
 	})
 	if err != nil {
 		t.Fatalf("AddObservation: %v", err)
@@ -366,7 +366,7 @@ func TestCmdContextAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.New: %v", err)
 	}
-	_, err = s.AddPrompt(store.AddPromptParams{SessionID: "s-ctx", Content: "user asked about context", Project: "project-x"})
+	_, err = s.AddPrompt(store.AddPromptParams{SessionID: "test", Content: "test", Project: "project-x"})
 	if err != nil {
 		t.Fatalf("AddPrompt: %v", err)
 	}
@@ -423,7 +423,7 @@ func TestCmdExportAndImport(t *testing.T) {
 	}
 	defer s.Close()
 
-	results, err := s.Search("export", store.SearchOptions{Limit: 10, Project: "proj-exp"})
+	results, err := s.Search("export", store.SearchOptions{Limit: 10, Workspace: "proj-exp"})
 	if err != nil {
 		t.Fatalf("Search after import: %v", err)
 	}
