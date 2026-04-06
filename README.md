@@ -1,6 +1,12 @@
-# Ancora
-
-> Persistent memory for AI agents. Local-first, open source.
+<div align="center">
+  <img src="assets/ancora-logo.png" alt="Ancora Logo" width="200"/>
+  
+  # Ancora
+  
+  **Scalable memory for real AI agent orchestration and shared knowledge**
+  
+  > Persistent memory for AI agents. Local-first, open source.
+</div>
 
 [![GitHub stars](https://img.shields.io/github/stars/Syfra3/ancora?style=social)](https://github.com/Syfra3/ancora)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
