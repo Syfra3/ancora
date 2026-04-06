@@ -213,25 +213,25 @@ func candidateLimit(limit int) int {
 }
 
 func filterResults(results []store.SearchResult, opts store.SearchOptions) []store.SearchResult {
-	normalizedProject, _ := store.NormalizeProject(opts.Project)
-	normalizedScope := normalizeScope(opts.Scope)
-	useScopeFilter := strings.TrimSpace(opts.Scope) != ""
+	normalizedWorkspace, _ := store.NormalizeProject(opts.Workspace)
+	normalizedVisibility := normalizeScope(opts.Visibility)
+	useVisibilityFilter := strings.TrimSpace(opts.Visibility) != ""
 
 	filtered := make([]store.SearchResult, 0, len(results))
 	for _, r := range results {
 		if opts.Type != "" && r.Type != opts.Type {
 			continue
 		}
-		if normalizedProject != "" {
-			project := ""
-			if r.Project != nil {
-				project = *r.Project
+		if normalizedWorkspace != "" {
+			workspace := ""
+			if r.Workspace != nil {
+				workspace = *r.Workspace
 			}
-			if project != normalizedProject {
+			if workspace != normalizedWorkspace {
 				continue
 			}
 		}
-		if useScopeFilter && r.Scope != normalizedScope {
+		if useVisibilityFilter && r.Visibility != normalizedVisibility {
 			continue
 		}
 		filtered = append(filtered, r)

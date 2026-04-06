@@ -2013,16 +2013,17 @@ func (s *Store) Import(data *ExportData) (*ImportResult, error) {
 	// Import observations (use new IDs — AUTOINCREMENT)
 	for _, obs := range data.Observations {
 		_, err := s.execHook(tx,
-			`INSERT INTO observations (sync_id, session_id, type, title, content, tool_name, project, scope, topic_key, normalized_hash, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO observations (sync_id, session_id, type, title, content, tool_name, workspace, visibility, organization, topic_key, normalized_hash, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			normalizeExistingSyncID(obs.SyncID, "obs"),
 			obs.SessionID,
 			obs.Type,
 			obs.Title,
 			obs.Content,
 			obs.ToolName,
-			obs.Project,
-			normalizeScope(obs.Scope),
+			obs.Workspace,
+			obs.Visibility,
+			obs.Organization,
 			nullableString(normalizeTopicKey(derefString(obs.TopicKey))),
 			hashNormalized(obs.Content),
 			maxInt(obs.RevisionCount, 1),
@@ -2367,13 +2368,13 @@ func (s *Store) ApplyPulledMutation(targetKey string, mutation SyncMutation) err
 
 func (s *Store) GetObservationBySyncID(syncID string) (*Observation, error) {
 	row := s.db.QueryRow(
-		`SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, project,
-		        scope, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+		`SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, workspace,
+		        visibility, organization, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		 FROM observations WHERE sync_id = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1`,
 		syncID,
 	)
 	var o Observation
-	if err := row.Scan(&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content, &o.ToolName, &o.Project, &o.Scope, &o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt, &o.CreatedAt, &o.UpdatedAt, &o.DeletedAt); err != nil {
+	if err := row.Scan(&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content, &o.ToolName, &o.Workspace, &o.Visibility, &o.Organization, &o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt, &o.CreatedAt, &o.UpdatedAt, &o.DeletedAt); err != nil {
 		return nil, err
 	}
 	return &o, nil
@@ -2992,9 +2993,9 @@ func (s *Store) backfillSessionSyncMutationsTx(tx *sql.Tx, project string) error
 
 func (s *Store) backfillObservationSyncMutationsTx(tx *sql.Tx, project string) error {
 	rows, err := s.queryItHook(tx, `
-		SELECT sync_id, session_id, type, title, content, tool_name, project, scope, topic_key
+		SELECT sync_id, session_id, type, title, content, tool_name, workspace, visibility, organization, topic_key
 		FROM observations
-		WHERE ifnull(project, '') = ?
+		WHERE ifnull(workspace, '') = ?
 		  AND deleted_at IS NULL
 		  AND NOT EXISTS (
 			SELECT 1
@@ -3014,7 +3015,7 @@ func (s *Store) backfillObservationSyncMutationsTx(tx *sql.Tx, project string) e
 
 	for rows.Next() {
 		var payload syncObservationPayload
-		if err := rows.Scan(&payload.SyncID, &payload.SessionID, &payload.Type, &payload.Title, &payload.Content, &payload.ToolName, &payload.Project, &payload.Scope, &payload.TopicKey); err != nil {
+		if err := rows.Scan(&payload.SyncID, &payload.SessionID, &payload.Type, &payload.Title, &payload.Content, &payload.ToolName, &payload.Workspace, &payload.Visibility, &payload.Organization, &payload.TopicKey); err != nil {
 			return err
 		}
 		if err := s.enqueueSyncMutationTx(tx, SyncEntityObservation, payload.SyncID, SyncOpUpsert, payload); err != nil {
@@ -3058,13 +3059,13 @@ func (s *Store) backfillPromptSyncMutationsTx(tx *sql.Tx, project string) error 
 }
 
 // enqueueObservationSyncTx enqueues a sync mutation for an observation,
-// enforcing the invariant that scope=personal observations are NEVER synced.
+// enforcing the invariant that visibility=personal observations are NEVER synced.
 // This is a hard security boundary — personal memories (finance, goals, health,
 // etc.) must never leave the local device regardless of project enrollment.
 // Use this instead of enqueueSyncMutationTx for all observation upserts.
 func (s *Store) enqueueObservationSyncTx(tx *sql.Tx, obs *Observation) error {
-	if obs.Scope == "personal" {
-		return nil // hard block — personal scope never enters sync journal
+	if obs.Visibility == "personal" {
+		return nil // hard block — personal visibility never enters sync journal
 	}
 	return s.enqueueSyncMutationTx(tx, SyncEntityObservation, obs.SyncID, SyncOpUpsert, observationPayloadFromObservation(obs))
 }
@@ -3102,16 +3103,16 @@ func (s *Store) enqueueSyncMutationTx(tx *sql.Tx, entity, entityKey, op string, 
 	return err
 }
 
-// extractProjectFromPayload returns the project string from a sync payload struct.
-// It handles both string and *string Project fields across all entity payload types.
-// Returns empty string if the payload has no project or project is nil.
+// extractProjectFromPayload returns the workspace string from a sync payload struct.
+// It handles both string and *string Workspace fields across all entity payload types.
+// Returns empty string if the payload has no workspace or workspace is nil.
 func extractProjectFromPayload(payload any) string {
 	switch p := payload.(type) {
 	case syncSessionPayload:
 		return p.Project
 	case syncObservationPayload:
-		if p.Project != nil {
-			return *p.Project
+		if p.Workspace != nil {
+			return *p.Workspace
 		}
 		return ""
 	case syncPromptPayload:
@@ -3152,20 +3153,20 @@ func decodeSyncPayload(payload []byte, dest any) error {
 
 func (s *Store) getObservationTx(tx *sql.Tx, id int64) (*Observation, error) {
 	row := tx.QueryRow(
-		`SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, project,
-		        scope, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+		`SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, workspace,
+		        visibility, organization, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		 FROM observations WHERE id = ? AND deleted_at IS NULL`, id,
 	)
 	var o Observation
-	if err := row.Scan(&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content, &o.ToolName, &o.Project, &o.Scope, &o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt, &o.CreatedAt, &o.UpdatedAt, &o.DeletedAt); err != nil {
+	if err := row.Scan(&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content, &o.ToolName, &o.Workspace, &o.Visibility, &o.Organization, &o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt, &o.CreatedAt, &o.UpdatedAt, &o.DeletedAt); err != nil {
 		return nil, err
 	}
 	return &o, nil
 }
 
 func (s *Store) getObservationBySyncIDTx(tx *sql.Tx, syncID string, includeDeleted bool) (*Observation, error) {
-	query := `SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, project,
-		        scope, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+	query := `SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, workspace,
+		        visibility, organization, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		 FROM observations WHERE sync_id = ?`
 	if !includeDeleted {
 		query += ` AND deleted_at IS NULL`
@@ -3173,7 +3174,7 @@ func (s *Store) getObservationBySyncIDTx(tx *sql.Tx, syncID string, includeDelet
 	query += ` ORDER BY id DESC LIMIT 1`
 	row := tx.QueryRow(query, syncID)
 	var o Observation
-	if err := row.Scan(&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content, &o.ToolName, &o.Project, &o.Scope, &o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt, &o.CreatedAt, &o.UpdatedAt, &o.DeletedAt); err != nil {
+	if err := row.Scan(&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content, &o.ToolName, &o.Workspace, &o.Visibility, &o.Organization, &o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt, &o.CreatedAt, &o.UpdatedAt, &o.DeletedAt); err != nil {
 		return nil, err
 	}
 	return &o, nil
@@ -3181,15 +3182,16 @@ func (s *Store) getObservationBySyncIDTx(tx *sql.Tx, syncID string, includeDelet
 
 func observationPayloadFromObservation(obs *Observation) syncObservationPayload {
 	return syncObservationPayload{
-		SyncID:    obs.SyncID,
-		SessionID: obs.SessionID,
-		Type:      obs.Type,
-		Title:     obs.Title,
-		Content:   obs.Content,
-		ToolName:  obs.ToolName,
-		Project:   obs.Project,
-		Scope:     obs.Scope,
-		TopicKey:  obs.TopicKey,
+		SyncID:       obs.SyncID,
+		SessionID:    obs.SessionID,
+		Type:         obs.Type,
+		Title:        obs.Title,
+		Content:      obs.Content,
+		ToolName:     obs.ToolName,
+		Workspace:    obs.Workspace,
+		Visibility:   obs.Visibility,
+		Organization: obs.Organization,
+		TopicKey:     obs.TopicKey,
 	}
 }
 
@@ -3211,9 +3213,9 @@ func (s *Store) applyObservationUpsertTx(tx *sql.Tx, payload syncObservationPayl
 	existing, err := s.getObservationBySyncIDTx(tx, payload.SyncID, true)
 	if err == sql.ErrNoRows {
 		_, err = s.execHook(tx,
-			`INSERT INTO observations (sync_id, session_id, type, title, content, tool_name, project, scope, topic_key, normalized_hash, revision_count, duplicate_count, updated_at, deleted_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), NULL)`,
-			payload.SyncID, payload.SessionID, payload.Type, payload.Title, payload.Content, payload.ToolName, payload.Project, normalizeScope(payload.Scope), payload.TopicKey, hashNormalized(payload.Content),
+			`INSERT INTO observations (sync_id, session_id, type, title, content, tool_name, workspace, visibility, organization, topic_key, normalized_hash, revision_count, duplicate_count, updated_at, deleted_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), NULL)`,
+			payload.SyncID, payload.SessionID, payload.Type, payload.Title, payload.Content, payload.ToolName, payload.Workspace, payload.Visibility, payload.Organization, payload.TopicKey, hashNormalized(payload.Content),
 		)
 		return err
 	}
@@ -3222,9 +3224,9 @@ func (s *Store) applyObservationUpsertTx(tx *sql.Tx, payload syncObservationPayl
 	}
 	_, err = s.execHook(tx,
 		`UPDATE observations
-		 SET session_id = ?, type = ?, title = ?, content = ?, tool_name = ?, project = ?, scope = ?, topic_key = ?, normalized_hash = ?, revision_count = revision_count + 1, updated_at = datetime('now'), deleted_at = NULL
+		 SET session_id = ?, type = ?, title = ?, content = ?, tool_name = ?, workspace = ?, visibility = ?, organization = ?, topic_key = ?, normalized_hash = ?, revision_count = revision_count + 1, updated_at = datetime('now'), deleted_at = NULL
 		 WHERE id = ?`,
-		payload.SessionID, payload.Type, payload.Title, payload.Content, payload.ToolName, payload.Project, normalizeScope(payload.Scope), payload.TopicKey, hashNormalized(payload.Content), existing.ID,
+		payload.SessionID, payload.Type, payload.Title, payload.Content, payload.ToolName, payload.Workspace, payload.Visibility, payload.Organization, payload.TopicKey, hashNormalized(payload.Content), existing.ID,
 	)
 	return err
 }
@@ -3902,13 +3904,13 @@ func (s *Store) PassiveCapture(p PassiveCaptureParams) (*PassiveCaptureResult, e
 		}
 
 		_, err = s.AddObservation(AddObservationParams{
-			SessionID: p.SessionID,
-			Type:      "passive",
-			Title:     title,
-			Content:   learning,
-			Project:   p.Project,
-			Scope:     "project",
-			ToolName:  p.Source,
+			SessionID:  p.SessionID,
+			Type:       "passive",
+			Title:      title,
+			Content:    learning,
+			Workspace:  p.Project,
+			Visibility: "work",
+			ToolName:   p.Source,
 		})
 		if err != nil {
 			return result, fmt.Errorf("passive capture save: %w", err)

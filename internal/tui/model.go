@@ -356,11 +356,11 @@ func loadMoveProjects(s *store.Store) tea.Cmd {
 	}
 }
 
-func moveObservation(s *store.Store, id int64, project *string, scope *string) tea.Cmd {
+func moveObservation(s *store.Store, id int64, workspace *string, visibility *string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := s.UpdateObservation(id, store.UpdateObservationParams{
-			Project: project,
-			Scope:   scope,
+			Workspace:  workspace,
+			Visibility: visibility,
 		})
 		return observationMovedMsg{err: err}
 	}

@@ -642,10 +642,10 @@ func handleSearch(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		limit := intArg(req, "limit", 10)
 
 		searchResults, searchMode, err := search.SearchWithOptions(query, store.SearchOptions{
-			Type:    typ,
-			Project: project,
-			Scope:   scope,
-			Limit:   limit,
+			Type:       typ,
+			Workspace:  project,
+			Visibility: scope,
+			Limit:      limit,
 		}, cfg.Embedder, s)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Search error: %s. Try simpler keywords.", err)), nil
@@ -664,19 +664,19 @@ func handleSearch(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		fmt.Fprintf(&b, "Ancora\n**Searching**: %s\n\nFound %d memories (search_mode: %s):\n\n", query, len(results), searchMode)
 		anyTruncated := false
 		for i, r := range results {
-			projectDisplay := ""
-			if r.Project != nil {
-				projectDisplay = fmt.Sprintf(" | project: %s", *r.Project)
+			workspaceDisplay := ""
+			if r.Workspace != nil {
+				workspaceDisplay = fmt.Sprintf(" | workspace: %s", *r.Workspace)
 			}
 			preview := truncate(r.Content, 300)
 			if len(r.Content) > 300 {
 				anyTruncated = true
 				preview += " [preview]"
 			}
-			fmt.Fprintf(&b, "[%d] #%d (%s) — %s\n    %s\n    %s%s | scope: %s\n\n",
+			fmt.Fprintf(&b, "[%d] #%d (%s) — %s\n    %s\n    %s%s | visibility: %s\n\n",
 				i+1, r.ID, r.Type, r.Title,
 				preview,
-				r.CreatedAt, projectDisplay, r.Scope)
+				r.CreatedAt, workspaceDisplay, r.Visibility)
 		}
 		if anyTruncated {
 			fmt.Fprintf(&b, "---\nResults above are previews (300 chars). To read the full content of a specific memory, call ancora_get(id: <ID>).\n")
@@ -740,13 +740,13 @@ func handleSave(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		truncated := len(content) > s.MaxObservationLength()
 
 		_, err := s.AddObservation(store.AddObservationParams{
-			SessionID: sessionID,
-			Type:      typ,
-			Title:     title,
-			Content:   content,
-			Project:   project,
-			Scope:     scope,
-			TopicKey:  topicKey,
+			SessionID:  sessionID,
+			Type:       typ,
+			Title:      title,
+			Content:    content,
+			Workspace:  project,
+			Visibility: scope,
+			TopicKey:   topicKey,
 		})
 		if err != nil {
 			return mcp.NewToolResultError("Failed to save: " + err.Error()), nil
@@ -805,17 +805,20 @@ func handleUpdate(s *store.Store) server.ToolHandlerFunc {
 		if v, ok := req.GetArguments()["type"].(string); ok {
 			update.Type = &v
 		}
-		if v, ok := req.GetArguments()["project"].(string); ok {
-			update.Project = &v
+		if v, ok := req.GetArguments()["workspace"].(string); ok {
+			update.Workspace = &v
 		}
-		if v, ok := req.GetArguments()["scope"].(string); ok {
-			update.Scope = &v
+		if v, ok := req.GetArguments()["visibility"].(string); ok {
+			update.Visibility = &v
+		}
+		if v, ok := req.GetArguments()["organization"].(string); ok {
+			update.Organization = &v
 		}
 		if v, ok := req.GetArguments()["topic_key"].(string); ok {
 			update.TopicKey = &v
 		}
 
-		if update.Title == nil && update.Content == nil && update.Type == nil && update.Project == nil && update.Scope == nil && update.TopicKey == nil {
+		if update.Title == nil && update.Content == nil && update.Type == nil && update.Workspace == nil && update.Visibility == nil && update.Organization == nil && update.TopicKey == nil {
 			return mcp.NewToolResultError("provide at least one field to update"), nil
 		}
 
@@ -829,7 +832,7 @@ func handleUpdate(s *store.Store) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("Failed to update memory: " + err.Error()), nil
 		}
 
-		msg := fmt.Sprintf("Ancora\n**Updating**: observation #%d\n\nMemory updated: %q (%s, scope=%s)", id, obs.Title, obs.Type, obs.Scope)
+		msg := fmt.Sprintf("Ancora\n**Updating**: observation #%d\n\nMemory updated: %q (%s, visibility=%s)", id, obs.Title, obs.Type, obs.Visibility)
 		if contentLen > s.MaxObservationLength() {
 			msg += fmt.Sprintf("\n⚠ WARNING: Content was truncated from %d to %d chars. Consider splitting into smaller observations.", contentLen, s.MaxObservationLength())
 		}
@@ -1009,11 +1012,11 @@ func handleGetObservation(s *store.Store) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(fmt.Sprintf("Observation #%d not found", id)), nil
 		}
 
-		project := ""
-		if obs.Project != nil {
-			project = fmt.Sprintf("\nProject: %s", *obs.Project)
+		workspace := ""
+		if obs.Workspace != nil {
+			workspace = fmt.Sprintf("\nWorkspace: %s", *obs.Workspace)
 		}
-		scope := fmt.Sprintf("\nScope: %s", obs.Scope)
+		visibility := fmt.Sprintf("\nVisibility: %s", obs.Visibility)
 		topic := ""
 		if obs.TopicKey != nil {
 			topic = fmt.Sprintf("\nTopic: %s", *obs.TopicKey)
@@ -1029,7 +1032,7 @@ func handleGetObservation(s *store.Store) server.ToolHandlerFunc {
 			id,
 			obs.ID, obs.Type, obs.Title,
 			obs.Content,
-			obs.SessionID, project+scope+topic, toolName+duplicateMeta+revisionMeta,
+			obs.SessionID, workspace+visibility+topic, toolName+duplicateMeta+revisionMeta,
 			obs.CreatedAt,
 		)
 
@@ -1061,7 +1064,7 @@ func handleSessionSummary(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc 
 			Type:      "session_summary",
 			Title:     fmt.Sprintf("Session summary: %s", project),
 			Content:   content,
-			Project:   project,
+			Workspace: project,
 		})
 		if err != nil {
 			return mcp.NewToolResultError("Failed to save session summary: " + err.Error()), nil

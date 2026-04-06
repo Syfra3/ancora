@@ -131,10 +131,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.MoveProjectList = msg.projects
-		// Set cursor to current project if it exists in the list
-		if m.SelectedObservation != nil && m.SelectedObservation.Project != nil {
+		// Set cursor to current workspace if it exists in the list
+		if m.SelectedObservation != nil && m.SelectedObservation.Workspace != nil {
 			for i, proj := range msg.projects {
-				if proj == *m.SelectedObservation.Project {
+				if proj == *m.SelectedObservation.Workspace {
 					m.MoveProjectCursor = i
 					break
 				}
@@ -560,8 +560,8 @@ func (m Model) handleObservationDetailKeys(key string) (tea.Model, tea.Cmd) {
 			m.MoveDone = false
 			m.MoveError = ""
 			m.MoveActiveColumn = "project"
-			// Set scope cursor based on current scope
-			if m.SelectedObservation.Scope == "personal" {
+			// Set visibility cursor based on current visibility
+			if m.SelectedObservation.Visibility == "personal" {
 				m.MoveScopeCursor = 1
 			} else {
 				m.MoveScopeCursor = 0

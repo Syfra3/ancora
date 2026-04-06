@@ -236,7 +236,7 @@ func (m Model) viewSearchResults() string {
 
 	for i := m.Scroll; i < end; i++ {
 		r := m.SearchResults[i]
-		b.WriteString(m.renderObservationListItem(i, r.ID, r.Type, r.Title, r.Content, r.CreatedAt, r.Project))
+		b.WriteString(m.renderObservationListItem(i, r.ID, r.Type, r.Title, r.Content, r.CreatedAt, r.Workspace))
 	}
 
 	// Scroll indicator
@@ -280,7 +280,7 @@ func (m Model) viewRecent() string {
 
 	for i := m.Scroll; i < end; i++ {
 		o := m.RecentObservations[i]
-		b.WriteString(m.renderObservationListItem(i, o.ID, o.Type, o.Title, o.Content, o.CreatedAt, o.Project))
+		b.WriteString(m.renderObservationListItem(i, o.ID, o.Type, o.Title, o.Content, o.CreatedAt, o.Workspace))
 	}
 
 	if count > visibleItems {
@@ -336,15 +336,15 @@ func (m Model) viewObservationDetail() string {
 			detailValueStyle.Render(*obs.ToolName)))
 	}
 
-	if obs.Project != nil {
+	if obs.Workspace != nil {
 		b.WriteString(fmt.Sprintf("%s %s\n",
-			detailLabelStyle.Render("Project:"),
-			projectStyle.Render(*obs.Project)))
+			detailLabelStyle.Render("Workspace:"),
+			projectStyle.Render(*obs.Workspace)))
 
-		if obs.Scope != "" {
+		if obs.Visibility != "" {
 			b.WriteString(fmt.Sprintf("%s %s\n",
-				detailLabelStyle.Render("Scope:"),
-				typeBadgeStyle.Render(obs.Scope)))
+				detailLabelStyle.Render("Visibility:"),
+				typeBadgeStyle.Render(obs.Visibility)))
 		}
 	}
 
@@ -418,12 +418,12 @@ func (m Model) viewMoveObservation() string {
 	b.WriteString("\n\n")
 
 	b.WriteString(fmt.Sprintf("  %s %s\n",
-		detailLabelStyle.Render("Project:"),
-		projectStyle.Render(derefString(obs.Project))))
+		detailLabelStyle.Render("Workspace:"),
+		projectStyle.Render(derefString(obs.Workspace))))
 
 	b.WriteString(fmt.Sprintf("  %s %s\n\n",
-		detailLabelStyle.Render("Scope:"),
-		typeBadgeStyle.Render(obs.Scope)))
+		detailLabelStyle.Render("Visibility:"),
+		typeBadgeStyle.Render(obs.Visibility)))
 
 	// Change to... section
 	b.WriteString(sectionHeadingStyle.Render("Change to..."))
@@ -697,7 +697,7 @@ func (m Model) viewSessionDetail() string {
 
 	for i := m.SessionDetailScroll; i < end; i++ {
 		o := m.SessionObservations[i]
-		b.WriteString(m.renderObservationListItem(i, o.ID, o.Type, o.Title, o.Content, o.CreatedAt, o.Project))
+		b.WriteString(m.renderObservationListItem(i, o.ID, o.Type, o.Title, o.Content, o.CreatedAt, o.Workspace))
 	}
 
 	if count > visibleItems {

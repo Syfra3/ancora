@@ -316,9 +316,9 @@ func cmdSearch(cfg store.Config) {
 				opts.Type = os.Args[i+1]
 				i++
 			}
-		case "--project":
+		case "--workspace":
 			if i+1 < len(os.Args) {
-				opts.Project = os.Args[i+1]
+				opts.Workspace = os.Args[i+1]
 				i++
 			}
 		case "--limit":
@@ -328,9 +328,14 @@ func cmdSearch(cfg store.Config) {
 				}
 				i++
 			}
-		case "--scope":
+		case "--visibility":
 			if i+1 < len(os.Args) {
-				opts.Scope = os.Args[i+1]
+				opts.Visibility = os.Args[i+1]
+				i++
+			}
+		case "--organization":
+			if i+1 < len(os.Args) {
+				opts.Organization = os.Args[i+1]
 				i++
 			}
 		case "--all-projects", "--all":
@@ -353,9 +358,9 @@ func cmdSearch(cfg store.Config) {
 	}
 	defer s.Close()
 
-	// If searching all projects, clear project filter
+	// If searching all workspaces, clear workspace filter
 	if searchAllProjects {
-		opts.Project = ""
+		opts.Workspace = ""
 	}
 
 	results, _, err := searchMemories(s, query, opts)
@@ -365,14 +370,14 @@ func cmdSearch(cfg store.Config) {
 	}
 
 	if len(results) == 0 {
-		// Check if there are observations in OTHER projects that might be relevant
-		if !searchAllProjects && opts.Project != "" {
+		// Check if there are observations in OTHER workspaces that might be relevant
+		if !searchAllProjects && opts.Workspace != "" {
 			allProjects, listErr := s.ListProjectNames()
 			if listErr == nil && len(allProjects) > 1 {
-				fmt.Printf("No memories found for: %q in project %q\n", query, opts.Project)
-				fmt.Printf("Hint: Related memories may exist in other projects. Re-run without --project to search everywhere.\n")
-				// Optionally show available projects
-				fmt.Printf("Available projects: %s\n", strings.Join(allProjects, ", "))
+				fmt.Printf("No memories found for: %q in workspace %q\n", query, opts.Workspace)
+				fmt.Printf("Hint: Related memories may exist in other workspaces. Re-run without --workspace to search everywhere.\n")
+				// Optionally show available workspaces
+				fmt.Printf("Available workspaces: %s\n", strings.Join(allProjects, ", "))
 				return
 			}
 		}
@@ -382,14 +387,14 @@ func cmdSearch(cfg store.Config) {
 
 	fmt.Printf("Found %d memories:\n\n", len(results))
 	for i, r := range results {
-		project := ""
-		if r.Project != nil {
-			project = fmt.Sprintf(" | project: %s", *r.Project)
+		workspace := ""
+		if r.Workspace != nil {
+			workspace = fmt.Sprintf(" | workspace: %s", *r.Workspace)
 		}
-		fmt.Printf("[%d] #%d (%s) — %s\n    %s\n    %s%s | scope: %s\n\n",
+		fmt.Printf("[%d] #%d (%s) — %s\n    %s\n    %s%s | visibility: %s\n\n",
 			i+1, r.ID, r.Type, r.Title,
 			truncate(r.Content, 300),
-			r.CreatedAt, project, r.Scope)
+			r.CreatedAt, workspace, r.Visibility)
 	}
 }
 
@@ -443,13 +448,13 @@ func cmdSave(cfg store.Config) {
 	}
 	s.CreateSession(sessionID, project, "")
 	id, err := storeAddObservation(s, store.AddObservationParams{
-		SessionID: sessionID,
-		Type:      typ,
-		Title:     title,
-		Content:   content,
-		Project:   project,
-		Scope:     scope,
-		TopicKey:  topicKey,
+		SessionID:  sessionID,
+		Type:       typ,
+		Title:      title,
+		Content:    content,
+		Workspace:  project,
+		Visibility: scope,
+		TopicKey:   topicKey,
 	})
 	if err != nil {
 		fatal(err)

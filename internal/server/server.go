@@ -273,10 +273,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	searchResults, _, err := search.SearchWithOptions(query, store.SearchOptions{
-		Type:    r.URL.Query().Get("type"),
-		Project: r.URL.Query().Get("project"),
-		Scope:   r.URL.Query().Get("scope"),
-		Limit:   queryInt(r, "limit", 10),
+		Type:         r.URL.Query().Get("type"),
+		Workspace:    r.URL.Query().Get("workspace"),
+		Visibility:   r.URL.Query().Get("visibility"),
+		Organization: r.URL.Query().Get("organization"),
+		Limit:        queryInt(r, "limit", 10),
 	}, s.embedder, s.store)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
@@ -322,7 +323,7 @@ func (s *Server) handleUpdateObservation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if body.Type == nil && body.Title == nil && body.Content == nil && body.Project == nil && body.Scope == nil && body.TopicKey == nil {
+	if body.Type == nil && body.Title == nil && body.Content == nil && body.Workspace == nil && body.Visibility == nil && body.Organization == nil && body.TopicKey == nil {
 		jsonError(w, http.StatusBadRequest, "at least one field is required")
 		return
 	}
