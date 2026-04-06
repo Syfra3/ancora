@@ -183,11 +183,9 @@ Ancora includes a beautiful terminal user interface for browsing and managing yo
 syfra tui
 ```
 
-<!-- Uncomment when TUI screenshot is added
 <div align="center">
-  <img src="assets/ancora-tui.png" alt="Ancora TUI Dashboard" width="800"/>
+  <img src="assets/TUI-screenshot-1.png" alt="Ancora TUI Dashboard" width="800"/>
 </div>
--->
 
 **TUI Features:**
 - 🔍 **Search memories** - Find observations by content or metadata
