@@ -140,7 +140,7 @@ func TestScopeFiltersSearchAndContext(t *testing.T) {
 		t.Fatalf("add personal observation: %v", err)
 	}
 
-	projectResults, err := s.Search("regex", SearchOptions{Workspace: "engram", Visibility: "project", Limit: 10})
+	projectResults, err := s.Search("regex", SearchOptions{Project: "engram", Visibility: "project", Limit: 10})
 	if err != nil {
 		t.Fatalf("search project scope: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestScopeFiltersSearchAndContext(t *testing.T) {
 		t.Fatalf("expected no project-scope regex results, got %d", len(projectResults))
 	}
 
-	personalResults, err := s.Search("regex", SearchOptions{Workspace: "engram", Visibility: "personal", Limit: 10})
+	personalResults, err := s.Search("regex", SearchOptions{Project: "engram", Visibility: "personal", Limit: 10})
 	if err != nil {
 		t.Fatalf("search personal scope: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestUpdateAndSoftDeleteExcludedFromSearchAndTimeline(t *testing.T) {
 		t.Fatalf("expected deleted observation to be hidden from GetObservation")
 	}
 
-	searchResults, err := s.Search("deleted", SearchOptions{Workspace: "engram", Limit: 10})
+	searchResults, err := s.Search("deleted", SearchOptions{Project: "engram", Limit: 10})
 	if err != nil {
 		t.Fatalf("search after delete: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestNewMigratesLegacyObservationIDSchema(t *testing.T) {
 		seen[o.ID] = true
 	}
 
-	results, err := s.Search("legacy", SearchOptions{Workspace: "engram", Limit: 10})
+	results, err := s.Search("legacy", SearchOptions{Project: "engram", Limit: 10})
 	if err != nil {
 		t.Fatalf("search after migration: %v", err)
 	}
@@ -1548,7 +1548,7 @@ func TestStoreAdditionalQueryAndMutationBranches(t *testing.T) {
 
 	newProject := ""
 	newTopic := ""
-	updated, err := s.UpdateObservation(obsID, UpdateObservationParams{Workspace: &newProject, TopicKey: &newTopic})
+	updated, err := s.UpdateObservation(obsID, UpdateObservationParams{Project: &newProject, TopicKey: &newTopic})
 	if err != nil {
 		t.Fatalf("update observation: %v", err)
 	}
@@ -3009,8 +3009,8 @@ func TestEnrollProjectBasic(t *testing.T) {
 	if len(projects) != 1 {
 		t.Fatalf("expected 1 enrolled project, got %d", len(projects))
 	}
-	if projects[0].Workspace != "engram" {
-		t.Fatalf("expected project 'engram', got %q", projects[0].Workspace)
+	if projects[0].Project != "engram" {
+		t.Fatalf("expected project 'engram', got %q", projects[0].Project)
 	}
 	if projects[0].EnrolledAt == "" {
 		t.Fatal("expected enrolled_at to be set")
@@ -3105,8 +3105,8 @@ func TestEnrollProjectBackfillsHistoricalMutations(t *testing.T) {
 		if mutation.EntityKey != entityKey {
 			t.Fatalf("expected entity_key %q for %s, got %q", entityKey, mutation.Entity, mutation.EntityKey)
 		}
-		if mutation.Workspace != "legacy-proj" {
-			t.Fatalf("expected project legacy-proj, got %q", mutation.Workspace)
+		if mutation.Project != "legacy-proj" {
+			t.Fatalf("expected project legacy-proj, got %q", mutation.Project)
 		}
 	}
 	state, err := s.GetSyncState(DefaultSyncTargetKey)
@@ -3582,7 +3582,7 @@ func TestExtractProjectFromUnknownPayloadFallback(t *testing.T) {
 	p := struct {
 		Project string `json:"project"`
 		Other   string `json:"other"`
-	}{Workspace: "fallback-proj", Other: "x"}
+	}{Project: "fallback-proj", Other: "x"}
 	got := extractProjectFromPayload(p)
 	if got != "fallback-proj" {
 		t.Fatalf("expected 'fallback-proj', got %q", got)
@@ -4142,7 +4142,7 @@ func TestMigrateProject(t *testing.T) {
 	}
 
 	// Verify FTS search finds it under new project
-	results, _ := s.Search("test obs", SearchOptions{Workspace: new_, Limit: 10})
+	results, _ := s.Search("test obs", SearchOptions{Project: new_, Limit: 10})
 	if len(results) != 1 {
 		t.Fatalf("expected FTS to find 1 result under new project, got %d", len(results))
 	}

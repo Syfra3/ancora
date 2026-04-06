@@ -573,7 +573,7 @@ func TestCmdSearchAndSaveDanglingFlags(t *testing.T) {
 		t.Fatalf("unexpected save output: %q", stdout)
 	}
 
-	withArgs(t, "ancora", "search", "dangling-content", "--limit", "not-a-number", "--project")
+	withArgs(t, "ancora", "search", "dangling-content", "--limit", "not-a-number", "--workspace")
 	stdout, stderr, recovered = captureOutputAndRecover(t, func() { cmdSearch(cfg) })
 	if recovered != nil || stderr != "" {
 		t.Fatalf("search with dangling flags failed, panic=%v stderr=%q", recovered, stderr)

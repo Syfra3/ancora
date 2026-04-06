@@ -282,8 +282,8 @@ func TestCmdSaveAndSearch(t *testing.T) {
 	withArgs(t,
 		"ancora", "save", "my-title", "my-content",
 		"--type", "bugfix",
-		"--project", "alpha",
-		"--scope", "personal",
+		"--workspace", "alpha",
+		"--visibility", "personal",
 		"--topic", "auth/token",
 	)
 
@@ -295,7 +295,7 @@ func TestCmdSaveAndSearch(t *testing.T) {
 		t.Fatalf("unexpected save output: %q", stdout)
 	}
 
-	withArgs(t, "ancora", "search", "my-content", "--type", "bugfix", "--project", "alpha", "--scope", "personal", "--limit", "1")
+	withArgs(t, "ancora", "search", "my-content", "--type", "bugfix", "--workspace", "alpha", "--visibility", "personal", "--limit", "1")
 	searchOut, searchErr := captureOutput(t, func() { cmdSearch(cfg) })
 	if searchErr != "" {
 		t.Fatalf("expected no stderr from search, got: %q", searchErr)
@@ -325,7 +325,7 @@ func TestCmdSearchDefaultsToAllProjects(t *testing.T) {
 		t.Fatalf("expected no stderr from cross-project search, got: %q", stderr)
 	}
 	if !strings.Contains(stdout, "alpha hit") || !strings.Contains(stdout, "beta hit") {
-		t.Fatalf("expected search without --project to include multiple projects, got: %q", stdout)
+		t.Fatalf("expected search without --workspace to include multiple projects, got: %q", stdout)
 	}
 }
 
@@ -579,7 +579,7 @@ func TestCmdSearchLocalMode(t *testing.T) {
 	cfg := testConfig(t)
 	mustSeedObservation(t, cfg, "s-local", "proj-local", "note", "local-result", "local content for search", "project")
 
-	withArgs(t, "ancora", "search", "local", "--project", "proj-local")
+	withArgs(t, "ancora", "search", "local", "--workspace", "proj-local")
 	stdout, stderr := captureOutput(t, func() { cmdSearch(cfg) })
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got: %q", stderr)
@@ -791,12 +791,12 @@ func TestCmdProjectsAllNoGroups(t *testing.T) {
 }
 
 func TestCmdMCPDetectsProjectFromFlag(t *testing.T) {
-	// Test that --project flag is parsed and passed to MCP config.
+	// Test that --workspace flag is parsed and passed to MCP config.
 	// We can't easily test the full MCP server startup (it blocks on stdio),
 	// but we test the flag-parsing + detectProject chain indirectly by
 	// checking that cmdMCP doesn't crash when store is available.
 	//
-	// The key invariant tested: --project sets detectedProject correctly.
+	// The key invariant tested: --workspace sets detectedProject correctly.
 	// We verify by stubbing newMCPServerWithConfig and checking the MCPConfig.
 	cfg := testConfig(t)
 
@@ -816,7 +816,7 @@ func TestCmdMCPDetectsProjectFromFlag(t *testing.T) {
 		return nil
 	}
 
-	withArgs(t, "ancora", "mcp", "--project=myproject")
+	withArgs(t, "ancora", "mcp", "--workspace=myproject")
 	_, _ = captureOutput(t, func() { cmdMCP(cfg) })
 
 	if capturedCfg.DefaultProject != "myproject" {
