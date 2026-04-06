@@ -6,10 +6,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/Syfra3/syfra/internal/embed"
+	"github.com/Syfra3/ancora/internal/embed"
 )
 
 func TestCheckEmbeddingsStatus(t *testing.T) {
@@ -18,14 +19,16 @@ func TestCheckEmbeddingsStatus(t *testing.T) {
 	origLookPath := execLookPath
 	origModelPath := embedModelPath
 	origModelFile := embedModelFile
+	origTestEmbedder := testEmbedderFn
 	defer func() {
 		osStat = origStat
 		execLookPath = origLookPath
 		embedModelPath = origModelPath
 		embedModelFile = origModelFile
+		testEmbedderFn = origTestEmbedder
 	}()
 
-	t.Run("both installed", func(t *testing.T) {
+	t.Run("both installed and verified", func(t *testing.T) {
 		embedModelPath = func() string { return "/home/test/.ancora/models" }
 		embedModelFile = "test-model.gguf"
 		osStat = func(name string) (os.FileInfo, error) {
@@ -40,6 +43,7 @@ func TestCheckEmbeddingsStatus(t *testing.T) {
 			}
 			return "", errors.New("not found")
 		}
+		testEmbedderFn = func() (int, error) { return embed.Dims, nil }
 
 		result, err := CheckEmbeddingsStatus()
 		if err != nil {
@@ -51,8 +55,55 @@ func TestCheckEmbeddingsStatus(t *testing.T) {
 		if !result.CLIAvailable {
 			t.Errorf("expected CLI available")
 		}
-		if !strings.Contains(result.Message, "fully configured") {
-			t.Errorf("expected 'fully configured' in message, got: %s", result.Message)
+		if !result.Tested {
+			t.Errorf("expected status to verify embedder")
+		}
+		if !result.Usable {
+			t.Errorf("expected usable=true after verification")
+		}
+		if result.TestDimensions != embed.Dims {
+			t.Errorf("expected dims=%d, got %d", embed.Dims, result.TestDimensions)
+		}
+		if result.TestError != "" {
+			t.Errorf("expected empty test error, got: %s", result.TestError)
+		}
+		if !strings.Contains(result.Message, "tested") {
+			t.Errorf("expected 'tested' in message, got: %s", result.Message)
+		}
+	})
+
+	t.Run("verification failure is exposed structurally", func(t *testing.T) {
+		embedModelPath = func() string { return "/home/test/.ancora/models" }
+		embedModelFile = "test-model.gguf"
+		osStat = func(name string) (os.FileInfo, error) {
+			if name == "/home/test/.ancora/models/test-model.gguf" {
+				return nil, nil
+			}
+			return nil, os.ErrNotExist
+		}
+		execLookPath = func(file string) (string, error) {
+			if file == "llama-embedding" {
+				return "/usr/bin/llama-embedding", nil
+			}
+			return "", errors.New("not found")
+		}
+		testEmbedderFn = func() (int, error) { return 0, errors.New("bad vector") }
+
+		result, err := CheckEmbeddingsStatus()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.Tested {
+			t.Fatalf("expected verification attempt")
+		}
+		if result.Usable {
+			t.Fatalf("expected usable=false")
+		}
+		if result.TestError != "bad vector" {
+			t.Fatalf("expected test error, got %q", result.TestError)
+		}
+		if !strings.Contains(result.Message, "test failed") {
+			t.Fatalf("expected failure message, got %q", result.Message)
 		}
 	})
 
@@ -318,8 +369,8 @@ func TestSetupEmbeddings(t *testing.T) {
 			return "", errors.New("not found")
 		}
 		// Mock the embedder test to always succeed
-		testEmbedderFn = func() error {
-			return nil
+		testEmbedderFn = func() (int, error) {
+			return embed.Dims, nil
 		}
 
 		result, err := SetupEmbeddings(false)
@@ -331,6 +382,103 @@ func TestSetupEmbeddings(t *testing.T) {
 		}
 		if !result.CLIAvailable {
 			t.Errorf("expected CLI available")
+		}
+		if !result.Tested || !result.Usable {
+			t.Errorf("expected setup result to show verified usable embeddings")
+		}
+		if result.TestDimensions != embed.Dims {
+			t.Errorf("expected test dimensions %d, got %d", embed.Dims, result.TestDimensions)
+		}
+	})
+
+	t.Run("downloads missing model and verifies embeddings are usable", func(t *testing.T) {
+		modelDir := t.TempDir()
+		expectedPath := filepath.Join(modelDir, "test.gguf")
+
+		embedModelPath = func() string { return modelDir }
+		embedModelFile = "test.gguf"
+		osStat = os.Stat
+		osMkdirAll = os.MkdirAll
+		osCreate = os.Create
+		ioRead = io.Copy
+		httpGet = func(string) (*http.Response, error) {
+			body := io.NopCloser(bytes.NewReader([]byte("model data")))
+			return &http.Response{StatusCode: http.StatusOK, Body: body}, nil
+		}
+		execLookPath = func(file string) (string, error) {
+			if file == "llama-embedding" {
+				return "/usr/bin/llama-embedding", nil
+			}
+			return "", errors.New("not found")
+		}
+		testEmbedderFn = func() (int, error) { return embed.Dims, nil }
+
+		result, err := SetupEmbeddings(false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.ModelInstalled {
+			t.Fatalf("expected model installed after setup")
+		}
+		if result.ModelPath != expectedPath {
+			t.Fatalf("expected model path %q, got %q", expectedPath, result.ModelPath)
+		}
+		if !result.CLIAvailable {
+			t.Fatalf("expected CLI available")
+		}
+		if !result.Tested || !result.Usable {
+			t.Fatalf("expected setup to verify usable embeddings, got tested=%v usable=%v", result.Tested, result.Usable)
+		}
+		if result.TestDimensions != embed.Dims {
+			t.Fatalf("expected %d dims, got %d", embed.Dims, result.TestDimensions)
+		}
+		if result.Message != "Embeddings fully configured and tested" {
+			t.Fatalf("unexpected message: %q", result.Message)
+		}
+		if _, err := os.Stat(expectedPath); err != nil {
+			t.Fatalf("expected downloaded model file: %v", err)
+		}
+	})
+
+	t.Run("downloaded model exposes verification failure structurally", func(t *testing.T) {
+		modelDir := t.TempDir()
+
+		embedModelPath = func() string { return modelDir }
+		embedModelFile = "test.gguf"
+		osStat = os.Stat
+		osMkdirAll = os.MkdirAll
+		osCreate = os.Create
+		ioRead = io.Copy
+		httpGet = func(string) (*http.Response, error) {
+			body := io.NopCloser(bytes.NewReader([]byte("model data")))
+			return &http.Response{StatusCode: http.StatusOK, Body: body}, nil
+		}
+		execLookPath = func(file string) (string, error) {
+			if file == "llama-embedding" {
+				return "/usr/bin/llama-embedding", nil
+			}
+			return "", errors.New("not found")
+		}
+		testEmbedderFn = func() (int, error) { return 0, errors.New("bad vector") }
+
+		result, err := SetupEmbeddings(false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.ModelInstalled || !result.CLIAvailable {
+			t.Fatalf("expected model and CLI to be present, got %#v", result)
+		}
+		if !result.Tested {
+			t.Fatalf("expected setup to attempt verification")
+		}
+		if result.Usable {
+			t.Fatalf("expected usable=false on verification failure")
+		}
+		if result.TestError != "bad vector" {
+			t.Fatalf("expected test error to be exposed, got %q", result.TestError)
+		}
+		if !strings.Contains(result.Message, "test failed") {
+			t.Fatalf("expected failure message, got %q", result.Message)
 		}
 	})
 }

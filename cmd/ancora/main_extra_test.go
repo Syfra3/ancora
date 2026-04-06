@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Syfra3/ancora/internal/embed"
 	"github.com/Syfra3/ancora/internal/mcp"
+	searchpkg "github.com/Syfra3/ancora/internal/search"
 	engramsrv "github.com/Syfra3/ancora/internal/server"
 	"github.com/Syfra3/ancora/internal/setup"
 	"github.com/Syfra3/ancora/internal/store"
@@ -84,8 +86,10 @@ func stubRuntimeHooks(t *testing.T) {
 	oldRunTeaProgram := runTeaProgram
 	oldSetupSupportedAgents := setupSupportedAgents
 	oldSetupInstallAgent := setupInstallAgent
+	oldSetupCheckEmbeddingsStatus := setupCheckEmbeddingsStatus
 	oldScanInputLine := scanInputLine
-	oldStoreSearch := storeSearch
+	oldNewEmbedder := newEmbedder
+	oldSearchMemories := searchMemories
 	oldStoreAddObservation := storeAddObservation
 	oldStoreTimeline := storeTimeline
 	oldStoreFormatContext := storeFormatContext
@@ -109,9 +113,12 @@ func stubRuntimeHooks(t *testing.T) {
 	runTeaProgram = func(*tea.Program) (tea.Model, error) { return nil, nil }
 	setupSupportedAgents = setup.SupportedAgents
 	setupInstallAgent = setup.Install
+	setupCheckEmbeddingsStatus = setup.CheckEmbeddingsStatus
 	scanInputLine = fmt.Scanln
-	storeSearch = func(s *store.Store, query string, opts store.SearchOptions) ([]store.SearchResult, error) {
-		return s.Search(query, opts)
+	newEmbedder = func() (embed.Embedder, error) { return embed.New() }
+	searchMemories = func(s *store.Store, query string, opts store.SearchOptions) ([]store.SearchResult, searchpkg.Mode, error) {
+		results, err := s.Search(query, opts)
+		return results, searchpkg.ModeKeyword, err
 	}
 	storeAddObservation = func(s *store.Store, p store.AddObservationParams) (int64, error) {
 		return s.AddObservation(p)
@@ -141,8 +148,10 @@ func stubRuntimeHooks(t *testing.T) {
 		runTeaProgram = oldRunTeaProgram
 		setupSupportedAgents = oldSetupSupportedAgents
 		setupInstallAgent = oldSetupInstallAgent
+		setupCheckEmbeddingsStatus = oldSetupCheckEmbeddingsStatus
 		scanInputLine = oldScanInputLine
-		storeSearch = oldStoreSearch
+		newEmbedder = oldNewEmbedder
+		searchMemories = oldSearchMemories
 		storeAddObservation = oldStoreAddObservation
 		storeTimeline = oldStoreTimeline
 		storeFormatContext = oldStoreFormatContext
@@ -275,7 +284,8 @@ func TestCmdSetupDirectAndInteractive(t *testing.T) {
 	}
 
 	withArgs(t, "ancora", "setup", "codex")
-	out, errOut, recovered := captureOutputAndRecover(t, func() { cmdSetup() })
+	cfg := testConfig(t)
+	out, errOut, recovered := captureOutputAndRecover(t, func() { cmdSetup(cfg) })
 	if recovered != nil || errOut != "" {
 		t.Fatalf("direct setup should succeed, panic=%v stderr=%q", recovered, errOut)
 	}
@@ -284,7 +294,7 @@ func TestCmdSetupDirectAndInteractive(t *testing.T) {
 	}
 
 	withArgs(t, "ancora", "setup", "broken")
-	_, errOut, recovered = captureOutputAndRecover(t, func() { cmdSetup() })
+	_, errOut, recovered = captureOutputAndRecover(t, func() { cmdSetup(cfg) })
 	if _, ok := recovered.(exitCode); !ok || !strings.Contains(errOut, "install failed") {
 		t.Fatalf("expected direct setup fatal, panic=%v stderr=%q", recovered, errOut)
 	}
@@ -299,7 +309,7 @@ func TestCmdSetupDirectAndInteractive(t *testing.T) {
 	}
 
 	withArgs(t, "ancora", "setup")
-	out, errOut, recovered = captureOutputAndRecover(t, func() { cmdSetup() })
+	out, errOut, recovered = captureOutputAndRecover(t, func() { cmdSetup(cfg) })
 	if recovered != nil || errOut != "" {
 		t.Fatalf("interactive setup should succeed, panic=%v stderr=%q", recovered, errOut)
 	}
@@ -313,7 +323,7 @@ func TestCmdSetupDirectAndInteractive(t *testing.T) {
 		return 1, nil
 	}
 	withArgs(t, "ancora", "setup")
-	_, errOut, recovered = captureOutputAndRecover(t, func() { cmdSetup() })
+	_, errOut, recovered = captureOutputAndRecover(t, func() { cmdSetup(cfg) })
 	if _, ok := recovered.(exitCode); !ok || !strings.Contains(errOut, "Invalid choice") {
 		t.Fatalf("expected invalid choice exit, panic=%v stderr=%q", recovered, errOut)
 	}
@@ -590,7 +600,7 @@ func TestCmdSetupHyphenArgFallsBackToInteractive(t *testing.T) {
 	}
 
 	withArgs(t, "ancora", "setup", "--not-an-agent")
-	stdout, stderr, recovered := captureOutputAndRecover(t, func() { cmdSetup() })
+	stdout, stderr, recovered := captureOutputAndRecover(t, func() { cmdSetup(testConfig(t)) })
 	if recovered != nil || stderr != "" {
 		t.Fatalf("setup interactive fallback failed: panic=%v stderr=%q", recovered, stderr)
 	}
@@ -642,8 +652,8 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 
 	t.Run("search seam error", func(t *testing.T) {
 		withArgs(t, "ancora", "search", "needle")
-		storeSearch = func(*store.Store, string, store.SearchOptions) ([]store.SearchResult, error) {
-			return nil, errors.New("forced search error")
+		searchMemories = func(*store.Store, string, store.SearchOptions) ([]store.SearchResult, searchpkg.Mode, error) {
+			return nil, searchpkg.ModeKeyword, errors.New("forced search error")
 		}
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdSearch(cfg) })
 		assertFatal(t, stderr, recovered, "forced search error")
@@ -737,7 +747,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 		}
 
 		withArgs(t, "ancora", "setup")
-		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdSetup() })
+		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdSetup(testConfig(t)) })
 		assertFatal(t, stderr, recovered, "forced setup error")
 	})
 }

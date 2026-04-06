@@ -4,11 +4,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Syfra3/ancora/internal/setup"
 	"github.com/Syfra3/ancora/internal/store"
 	"github.com/Syfra3/ancora/internal/version"
+	"github.com/charmbracelet/bubbles/spinner"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestUpdateHandlesWindowSizeAndCtrlC(t *testing.T) {
@@ -152,6 +152,7 @@ func TestUpdateSetupFlowAndSpinnerTick(t *testing.T) {
 func TestHandleDashboardAndSearchKeyPaths(t *testing.T) {
 	fx := newTestFixture(t)
 	m := New(fx.store, "")
+	m.IsFullyInstalled = true
 
 	updatedModel, _ := m.handleDashboardKeys("s")
 	updated := updatedModel.(Model)
@@ -160,6 +161,7 @@ func TestHandleDashboardAndSearchKeyPaths(t *testing.T) {
 	}
 
 	m = New(fx.store, "")
+	m.IsFullyInstalled = true
 	m.Cursor = 1
 	updatedModel, cmd := m.handleDashboardSelection()
 	updated = updatedModel.(Model)
@@ -171,6 +173,7 @@ func TestHandleDashboardAndSearchKeyPaths(t *testing.T) {
 	}
 
 	m = New(fx.store, "")
+	m.IsFullyInstalled = true
 	m.Cursor = 2
 	updatedModel, cmd = m.handleDashboardSelection()
 	updated = updatedModel.(Model)
@@ -182,11 +185,21 @@ func TestHandleDashboardAndSearchKeyPaths(t *testing.T) {
 	}
 
 	m = New(fx.store, "")
-	m.Cursor = 4
+	m.IsFullyInstalled = true
+	// Find setup action in the menu
+	menuItems := getDashboardMenuItems(m.IsFullyInstalled)
+	setupIdx := -1
+	for i, item := range menuItems {
+		if item.Action == "setup" {
+			setupIdx = i
+			break
+		}
+	}
+	m.Cursor = setupIdx
 	updatedModel, cmd = m.handleDashboardSelection()
 	updated = updatedModel.(Model)
-	if updated.Screen != ScreenSetup || len(updated.SetupAgents) == 0 {
-		t.Fatal("setup selection should initialize setup screen")
+	if updated.Screen != ScreenSetupEnv {
+		t.Fatal("setup selection should initialize setup environment screen")
 	}
 	if cmd != nil {
 		t.Fatal("setup selection should not return command")
@@ -472,19 +485,32 @@ func TestHandleKeyPressRouterAndClearsError(t *testing.T) {
 func TestHandleDashboardKeysAndSelectionRemainingBranches(t *testing.T) {
 	m := New(nil, "")
 
+	// Test with installed status
+	m.IsFullyInstalled = true
+	menuItems := getDashboardMenuItems(m.IsFullyInstalled)
+
 	m.Cursor = 0
 	updatedModel, _ := m.handleDashboardKeys("up")
 	if updatedModel.(Model).Cursor != 0 {
 		t.Fatal("cursor should stay at top boundary")
 	}
 
-	m.Cursor = len(dashboardMenuItems) - 1
+	m.Cursor = len(menuItems) - 1
 	updatedModel, _ = m.handleDashboardKeys("down")
-	if updatedModel.(Model).Cursor != len(dashboardMenuItems)-1 {
+	if updatedModel.(Model).Cursor != len(menuItems)-1 {
 		t.Fatal("cursor should stay at bottom boundary")
 	}
 
-	m.Cursor = 5
+	// Find exit action index
+	exitIdx := -1
+	for i, item := range menuItems {
+		if item.Action == "exit" {
+			exitIdx = i
+			break
+		}
+	}
+
+	m.Cursor = exitIdx
 	_, cmd := m.handleDashboardKeys(" ")
 	if cmd == nil {
 		t.Fatal("space on quit item should return quit command")
@@ -499,13 +525,43 @@ func TestHandleDashboardKeysAndSelectionRemainingBranches(t *testing.T) {
 	updatedModel, _ = m.handleDashboardSelection()
 	updated := updatedModel.(Model)
 	if updated.Screen != ScreenSearch || !updated.SearchInput.Focused() {
-		t.Fatal("cursor 0 selection should open search")
+		t.Fatal("cursor 0 selection should open search when installed")
 	}
 
-	m.Cursor = 5
+	// Test with not installed status
+	m.IsFullyInstalled = false
+	menuItemsNotInstalled := getDashboardMenuItems(m.IsFullyInstalled)
+
+	m.Cursor = 0
+	updatedModel, _ = m.handleDashboardSelection()
+	updated = updatedModel.(Model)
+	if updated.Screen != ScreenSetupEnv {
+		t.Fatal("cursor 0 selection should open setup when not installed")
+	}
+
+	// Exit should be at index 1 when not installed
+	if len(menuItemsNotInstalled) != 2 {
+		t.Fatalf("expected 2 menu items when not installed, got %d", len(menuItemsNotInstalled))
+	}
+	if menuItemsNotInstalled[1].Action != "exit" {
+		t.Fatal("second item should be exit when not installed")
+	}
+
+	// Test exit action - find it in the menu
+	m.IsFullyInstalled = true
+	menuItems = getDashboardMenuItems(m.IsFullyInstalled)
+	exitIdx = -1
+	for i, item := range menuItems {
+		if item.Action == "exit" {
+			exitIdx = i
+			break
+		}
+	}
+
+	m.Cursor = exitIdx
 	_, cmd = m.handleDashboardSelection()
 	if cmd == nil {
-		t.Fatal("cursor 5 (exit) selection should quit")
+		t.Fatal("exit selection should quit")
 	}
 
 	m.Cursor = 99
@@ -814,6 +870,7 @@ func TestSearchEscapeFlowNoLoop(t *testing.T) {
 func TestSearchInputClearedOnEnterFromDashboard(t *testing.T) {
 	// Verifies the search input is cleared each time search is opened from dashboard
 	m := New(nil, "")
+	m.IsFullyInstalled = true
 	m.Screen = ScreenDashboard
 	m.SearchInput.SetValue("old query")
 
@@ -824,7 +881,7 @@ func TestSearchInputClearedOnEnterFromDashboard(t *testing.T) {
 		t.Fatalf("search input should be cleared when opening search, got %q", m.SearchInput.Value())
 	}
 
-	// Open via dashboard selection (menu item 0)
+	// Open via dashboard selection (menu item 0 when installed)
 	m.Screen = ScreenDashboard
 	m.SearchInput.SetValue("another stale query")
 	m.Cursor = 0
@@ -940,6 +997,7 @@ func TestAdditionalKeyAliasAndBoundaryBranches(t *testing.T) {
 
 	// Dashboard alias branch
 	m = New(nil, "")
+	m.IsFullyInstalled = true
 	updatedModel, _ = m.handleDashboardKeys("/")
 	if updatedModel.(Model).Screen != ScreenSearch {
 		t.Fatal("dashboard slash should open search")

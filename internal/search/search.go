@@ -17,6 +17,8 @@
 package search
 
 import (
+	"strings"
+
 	"github.com/Syfra3/ancora/internal/store"
 )
 
@@ -38,6 +40,64 @@ const (
 type Result struct {
 	store.SearchResult
 	Mode Mode
+}
+
+// Embedder generates float32 query vectors for semantic search.
+type Embedder interface {
+	Embed(text string) ([]float32, error)
+}
+
+// SearchWithOptions runs keyword search first, then fuses semantic search when
+// an embedder is available. Project filtering is optional; when omitted the
+// search spans all local memory.
+func SearchWithOptions(query string, opts store.SearchOptions, embedder Embedder, s *store.Store) ([]Result, Mode, error) {
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+
+	keywordOpts := opts
+	keywordOpts.Limit = candidateLimit(limit)
+	kwResults, err := s.Search(query, keywordOpts)
+	if err != nil {
+		return nil, ModeKeyword, err
+	}
+
+	var queryVec []float32
+	if embedder != nil {
+		if vec, err := embedder.Embed(query); err == nil {
+			queryVec = vec
+		}
+	}
+
+	var semResults []store.SearchResult
+	if queryVec != nil {
+		semResults, err = s.SearchSemantic(queryVec, candidateLimit(limit))
+		if err != nil {
+			semResults = nil
+		} else {
+			semResults = filterResults(semResults, opts)
+		}
+	}
+
+	switch {
+	case len(semResults) == 0 && len(kwResults) == 0:
+		return nil, ModeKeyword, nil
+	case queryVec == nil || len(semResults) == 0:
+		out := make([]Result, 0, min(limit, len(kwResults)))
+		for i := 0; i < limit && i < len(kwResults); i++ {
+			out = append(out, Result{kwResults[i], ModeKeyword})
+		}
+		return out, ModeKeyword, nil
+	case len(kwResults) == 0:
+		out := make([]Result, 0, min(limit, len(semResults)))
+		for i := 0; i < limit && i < len(semResults); i++ {
+			out = append(out, Result{semResults[i], ModeSemantic})
+		}
+		return out, ModeSemantic, nil
+	default:
+		return rrf(kwResults, semResults, limit), ModeHybrid, nil
+	}
 }
 
 // HybridSearch merges FTS5 keyword results with vector semantic results
@@ -143,4 +203,46 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func candidateLimit(limit int) int {
+	if limit <= 0 {
+		return 10
+	}
+	return limit * 4
+}
+
+func filterResults(results []store.SearchResult, opts store.SearchOptions) []store.SearchResult {
+	normalizedProject, _ := store.NormalizeProject(opts.Project)
+	normalizedScope := normalizeScope(opts.Scope)
+	useScopeFilter := strings.TrimSpace(opts.Scope) != ""
+
+	filtered := make([]store.SearchResult, 0, len(results))
+	for _, r := range results {
+		if opts.Type != "" && r.Type != opts.Type {
+			continue
+		}
+		if normalizedProject != "" {
+			project := ""
+			if r.Project != nil {
+				project = *r.Project
+			}
+			if project != normalizedProject {
+				continue
+			}
+		}
+		if useScopeFilter && r.Scope != normalizedScope {
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+	return filtered
+}
+
+func normalizeScope(scope string) string {
+	v := strings.TrimSpace(strings.ToLower(scope))
+	if v == "personal" {
+		return "personal"
+	}
+	return "project"
 }

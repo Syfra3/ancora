@@ -1828,6 +1828,56 @@ func TestHandleSaveDefaultProjectDoesNotOverrideExplicit(t *testing.T) {
 	}
 }
 
+func TestHandleSearchWithoutProjectSearchesAllLocalMemory(t *testing.T) {
+	s := newMCPTestStore(t)
+	if err := s.CreateSession("s-default", "default-project", ""); err != nil {
+		t.Fatalf("create default session: %v", err)
+	}
+	if err := s.CreateSession("s-other", "other-project", ""); err != nil {
+		t.Fatalf("create other session: %v", err)
+	}
+
+	for _, obs := range []store.AddObservationParams{
+		{
+			SessionID: "s-default",
+			Type:      "decision",
+			Title:     "Default project hit",
+			Content:   "shared cross project query",
+			Project:   "default-project",
+			Scope:     "project",
+		},
+		{
+			SessionID: "s-other",
+			Type:      "decision",
+			Title:     "Other project hit",
+			Content:   "shared cross project query",
+			Project:   "other-project",
+			Scope:     "project",
+		},
+	} {
+		if _, err := s.AddObservation(obs); err != nil {
+			t.Fatalf("add observation %q: %v", obs.Title, err)
+		}
+	}
+
+	h := handleSearch(s, MCPConfig{DefaultProject: "default-project"})
+	res, err := h(context.Background(), mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"query": "shared cross project query",
+		"limit": 10.0,
+	}}})
+	if err != nil {
+		t.Fatalf("search error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected search tool error: %s", callResultText(t, res))
+	}
+
+	resultText := callResultText(t, res)
+	if !strings.Contains(resultText, "Default project hit") || !strings.Contains(resultText, "Other project hit") {
+		t.Fatalf("expected search without project filter to return both projects, got: %s", resultText)
+	}
+}
+
 // TestHybridSearchWithMockEmbedder verifies hybrid search works with embedder configured.
 func TestHybridSearchWithMockEmbedder(t *testing.T) {
 	s := newMCPTestStore(t)

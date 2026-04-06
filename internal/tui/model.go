@@ -10,6 +10,10 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
+
+	"github.com/Syfra3/ancora/internal/embed"
 	"github.com/Syfra3/ancora/internal/setup"
 	"github.com/Syfra3/ancora/internal/store"
 	"github.com/Syfra3/ancora/internal/version"
@@ -35,7 +39,9 @@ const (
 	ScreenSessionDetail
 	ScreenProjects
 	ScreenSetup
+	ScreenSetupEnv
 	ScreenMoveObservation
+	ScreenPurge
 )
 
 // ─── Custom Messages ─────────────────────────────────────────────────────────
@@ -99,6 +105,15 @@ type moveProjectsLoadedMsg struct {
 	err      error
 }
 
+type purgeResultMsg struct {
+	result *store.PurgeResult
+	err    error
+}
+
+type installationCheckMsg struct {
+	isInstalled bool
+}
+
 // ProjectWithEnrollment extends store.ProjectStats with sync enrollment status
 type ProjectWithEnrollment struct {
 	store.ProjectStats
@@ -125,7 +140,8 @@ type Model struct {
 	ErrorMsg string
 
 	// Dashboard
-	Stats *store.Stats
+	Stats            *store.Stats
+	IsFullyInstalled bool // true if database + embeddings are available
 
 	// Search
 	SearchInput   textinput.Model
@@ -173,6 +189,23 @@ type Model struct {
 	SetupAllowlistApplied bool   // true = allowlist was added successfully
 	SetupAllowlistError   string // error message if allowlist injection failed
 	SetupSpinner          spinner.Model
+
+	// Setup Environment (multi-step wizard)
+	SetupEnvStep          int    // 0=select plugin, 1=running setup
+	SetupEnvPlugin        string // "opencode" or "claude-code"
+	SetupEnvRunning       bool
+	SetupEnvModelDone     bool
+	SetupEnvModelProgress float64 // 0.0 to 1.0
+	SetupEnvBackfillDone  bool
+	SetupEnvPluginDone    bool
+	SetupEnvError         string
+	SetupEnvDownloader    *setup.Downloader // downloader instance for progress tracking
+
+	// Purge
+	PurgeConfirm       bool // true = user has confirmed purge
+	PurgeResult        *store.PurgeResult
+	PurgeError         string
+	PurgeConfirmCursor int // 0 = "No, go back", 1 = "Yes, delete everything"
 }
 
 // New creates a new TUI model connected to the given store.
@@ -202,8 +235,18 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		loadStats(m.store),
 		checkForUpdate(m.Version),
+		checkInstallation,
 		tea.EnterAltScreen,
 	)
+}
+
+// checkInstallation verifies if Ancora is fully installed
+func checkInstallation() tea.Msg {
+	modelPath := filepath.Join(embed.ModelInstallPath(), embed.ModelFileName)
+	_, err := os.Stat(modelPath)
+	return installationCheckMsg{
+		isInstalled: err == nil,
+	}
 }
 
 // ─── Commands (data loading) ─────────────────────────────────────────────────
@@ -320,6 +363,13 @@ func moveObservation(s *store.Store, id int64, project *string, scope *string) t
 			Scope:   scope,
 		})
 		return observationMovedMsg{err: err}
+	}
+}
+
+func purgeDatabase(s *store.Store) tea.Cmd {
+	return func() tea.Msg {
+		result, err := s.PurgeAll()
+		return purgeResultMsg{result: result, err: err}
 	}
 }
 

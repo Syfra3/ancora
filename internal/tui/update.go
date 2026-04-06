@@ -1,9 +1,13 @@
 package tui
 
 import (
+	"fmt"
+	"path/filepath"
+
+	"github.com/Syfra3/ancora/internal/embed"
+	"github.com/Syfra3/ancora/internal/setup"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/Syfra3/ancora/internal/setup"
 )
 
 // ─── Update ──────────────────────────────────────────────────────────────────
@@ -31,6 +35,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateCheckMsg:
 		m.UpdateStatus = msg.result.Status
 		m.UpdateMsg = msg.result.Message
+		return m, nil
+
+	case installationCheckMsg:
+		m.IsFullyInstalled = msg.isInstalled
 		return m, nil
 
 	case statsLoadedMsg:
@@ -159,6 +167,50 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+
+	case purgeResultMsg:
+		if msg.err != nil {
+			m.PurgeError = msg.err.Error()
+			return m, nil
+		}
+		m.PurgeResult = msg.result
+		m.PurgeError = ""
+		return m, nil
+
+	case setupEnvCompleteMsg:
+		m.SetupEnvRunning = false
+		if msg.err != nil {
+			m.SetupEnvError = msg.err.Error()
+		} else {
+			m.SetupEnvModelDone = true
+			m.SetupEnvModelProgress = 1.0
+			m.SetupEnvBackfillDone = true
+			m.SetupEnvPluginDone = true
+		}
+		return m, nil
+
+	case setupEnvProgressMsg:
+		switch msg.step {
+		case "model":
+			m.SetupEnvModelProgress = msg.progress
+			if msg.progress >= 1.0 {
+				m.SetupEnvModelDone = true
+				// Model done, start plugin install
+				return m, installSetupEnvPlugin(m.SetupEnvPlugin)
+			}
+			// Continue listening for progress
+			return m, listenForDownloadProgress(m.SetupEnvDownloader)
+		case "backfill":
+			if msg.progress >= 1.0 {
+				m.SetupEnvBackfillDone = true
+			}
+		case "plugin":
+			if msg.progress >= 1.0 {
+				m.SetupEnvPluginDone = true
+				m.SetupEnvRunning = false
+			}
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -191,8 +243,12 @@ func (m Model) handleKeyPress(key string) (tea.Model, tea.Cmd) {
 		return m.handleProjectsKeys(key)
 	case ScreenSetup:
 		return m.handleSetupKeys(key)
+	case ScreenSetupEnv:
+		return m.handleSetupEnvKeys(key)
 	case ScreenMoveObservation:
 		return m.handleMoveObservationKeys(key)
+	case ScreenPurge:
+		return m.handlePurgeKeys(key)
 	}
 	return m, nil
 }
@@ -203,30 +259,50 @@ func (m Model) handleKeyPress(key string) (tea.Model, tea.Cmd) {
 type MenuItem struct {
 	Label       string
 	Description string
+	Action      string // identifier for the action (search, recent, sessions, etc.)
 }
 
-var dashboardMenuItems = []MenuItem{
-	{"Search memories", "Find observations by content or metadata"},
-	{"Recent observations", "Browse latest saved memories"},
-	{"Browse sessions", "View all coding sessions"},
-	{"Browse projects", "View projects with sync status and scope"},
-	{"Setup agent plugin", "Install MCP integration for AI agents"},
-	{"Exit", "Close the TUI"},
+// getDashboardMenuItems returns menu items based on installation status
+func getDashboardMenuItems(isInstalled bool) []MenuItem {
+	if !isInstalled {
+		// Not installed: only show setup and exit
+		return []MenuItem{
+			{"Setup environment", "Install embedding model, run backfill, install plugin", "setup"},
+			{"Exit", "Close the TUI", "exit"},
+		}
+	}
+
+	// Fully installed: show all options, rename setup to upgrade/update
+	return []MenuItem{
+		{"Search memories", "Find observations by content or metadata", "search"},
+		{"Recent observations", "Browse latest saved memories", "recent"},
+		{"Browse sessions", "View all coding sessions", "sessions"},
+		{"Browse projects", "View projects with sync status and scope", "projects"},
+		{"Upgrade/Update environment", "Update embedding model and plugins", "setup"},
+		{"Purge database", "DELETE ALL data - observations, sessions, prompts", "purge"},
+		{"Exit", "Close the TUI", "exit"},
+	}
 }
 
 func (m Model) handleDashboardKeys(key string) (tea.Model, tea.Cmd) {
+	menuItems := getDashboardMenuItems(m.IsFullyInstalled)
+
 	switch key {
 	case "up", "k":
 		if m.Cursor > 0 {
 			m.Cursor--
 		}
 	case "down", "j":
-		if m.Cursor < len(dashboardMenuItems)-1 {
+		if m.Cursor < len(menuItems)-1 {
 			m.Cursor++
 		}
 	case "enter", " ":
 		return m.handleDashboardSelection()
 	case "s", "/":
+		// Only allow if installed
+		if !m.IsFullyInstalled {
+			return m, nil
+		}
 		m.PrevScreen = ScreenDashboard
 		m.Screen = ScreenSearch
 		m.Cursor = 0
@@ -234,6 +310,10 @@ func (m Model) handleDashboardKeys(key string) (tea.Model, tea.Cmd) {
 		m.SearchInput.Focus()
 		return m, nil
 	case "p":
+		// Only allow if installed
+		if !m.IsFullyInstalled {
+			return m, nil
+		}
 		m.PrevScreen = ScreenDashboard
 		m.Screen = ScreenProjects
 		m.Cursor = 0
@@ -241,53 +321,81 @@ func (m Model) handleDashboardKeys(key string) (tea.Model, tea.Cmd) {
 		m.ProjectScopeFilter = ""
 		return m, loadProjectsWithStats(m.store)
 	case "q":
-		return m, tea.Quit
+		// Check if the current cursor is on Exit action
+		if m.Cursor < len(menuItems) && menuItems[m.Cursor].Action == "exit" {
+			return m, tea.Quit
+		}
 	}
 	return m, nil
 }
 
 func (m Model) handleDashboardSelection() (tea.Model, tea.Cmd) {
-	switch m.Cursor {
-	case 0: // Search
+	menuItems := getDashboardMenuItems(m.IsFullyInstalled)
+
+	if m.Cursor >= len(menuItems) {
+		return m, nil
+	}
+
+	selectedAction := menuItems[m.Cursor].Action
+
+	switch selectedAction {
+	case "search":
 		m.PrevScreen = ScreenDashboard
 		m.Screen = ScreenSearch
 		m.Cursor = 0
 		m.SearchInput.SetValue("")
 		m.SearchInput.Focus()
 		return m, nil
-	case 1: // Recent observations
+
+	case "recent":
 		m.PrevScreen = ScreenDashboard
 		m.Screen = ScreenRecent
 		m.Cursor = 0
 		m.Scroll = 0
 		return m, loadRecentObservations(m.store)
-	case 2: // Sessions
+
+	case "sessions":
 		m.PrevScreen = ScreenDashboard
 		m.Screen = ScreenSessions
 		m.Cursor = 0
 		m.Scroll = 0
 		return m, loadRecentSessions(m.store)
-	case 3: // Projects
+
+	case "projects":
 		m.PrevScreen = ScreenDashboard
 		m.Screen = ScreenProjects
 		m.Cursor = 0
 		m.Scroll = 0
 		m.ProjectScopeFilter = ""
 		return m, loadProjectsWithStats(m.store)
-	case 4: // Setup
+
+	case "setup":
 		m.PrevScreen = ScreenDashboard
-		m.Screen = ScreenSetup
+		m.Screen = ScreenSetupEnv
 		m.Cursor = 0
-		m.SetupAgents = setup.SupportedAgents()
-		m.SetupResult = nil
-		m.SetupError = ""
-		m.SetupDone = false
-		m.SetupInstalling = false
-		m.SetupInstallingName = ""
+		m.SetupEnvStep = 0
+		m.SetupEnvPlugin = ""
+		m.SetupEnvRunning = false
+		m.SetupEnvModelDone = false
+		m.SetupEnvModelProgress = 0.0
+		m.SetupEnvBackfillDone = false
+		m.SetupEnvPluginDone = false
+		m.SetupEnvError = ""
 		return m, nil
-	case 5: // Quit
+
+	case "purge":
+		m.PrevScreen = ScreenDashboard
+		m.Screen = ScreenPurge
+		m.PurgeConfirm = false
+		m.PurgeConfirmCursor = 0
+		m.PurgeResult = nil
+		m.PurgeError = ""
+		return m, nil
+
+	case "exit":
 		return m, tea.Quit
 	}
+
 	return m, nil
 }
 
@@ -698,6 +806,119 @@ func (m Model) handleSetupKeys(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// ─── Setup Environment ────────────────────────────────────────────────────────
+
+func (m Model) handleSetupEnvKeys(key string) (tea.Model, tea.Cmd) {
+	// If running, block all keys except viewing
+	if m.SetupEnvRunning {
+		return m, nil
+	}
+
+	// Step 0: Select plugin
+	if m.SetupEnvStep == 0 {
+		switch key {
+		case "up", "k":
+			if m.Cursor > 0 {
+				m.Cursor--
+			}
+		case "down", "j":
+			if m.Cursor < 1 {
+				m.Cursor++
+			}
+		case "enter":
+			if m.Cursor == 0 {
+				m.SetupEnvPlugin = "opencode"
+			} else {
+				m.SetupEnvPlugin = "claude-code"
+			}
+			m.SetupEnvStep = 1
+			m.SetupEnvRunning = true
+
+			// Create downloader
+			destPath := filepath.Join(embed.ModelInstallPath(), embed.ModelFileName)
+			m.SetupEnvDownloader = setup.NewDownloader(destPath)
+
+			return m, tea.Batch(
+				m.SetupSpinner.Tick,
+				startSetupEnvDownload(m.SetupEnvDownloader),
+				listenForDownloadProgress(m.SetupEnvDownloader),
+			)
+		case "esc", "q":
+			m.Screen = ScreenDashboard
+			m.Cursor = 0
+			return m, loadStats(m.store)
+		}
+		return m, nil
+	}
+
+	// Step 1: Showing progress/done
+	if m.SetupEnvStep == 1 {
+		if !m.SetupEnvRunning {
+			switch key {
+			case "enter", "esc", "q":
+				m.Screen = ScreenDashboard
+				m.Cursor = 0
+				return m, loadStats(m.store)
+			}
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func startSetupEnvDownload(downloader *setup.Downloader) tea.Cmd {
+	return func() tea.Msg {
+		if err := downloader.Download(); err != nil {
+			return setupEnvCompleteMsg{err: fmt.Errorf("model download failed: %w", err)}
+		}
+		return nil
+	}
+}
+
+func listenForDownloadProgress(downloader *setup.Downloader) tea.Cmd {
+	return func() tea.Msg {
+		progress, ok := <-downloader.Progress
+		if !ok {
+			return nil
+		}
+
+		if progress.Error != nil {
+			return setupEnvCompleteMsg{err: progress.Error}
+		}
+
+		var progressPercent float64
+		if progress.TotalBytes > 0 {
+			progressPercent = float64(progress.BytesDownloaded) / float64(progress.TotalBytes)
+		}
+
+		return setupEnvProgressMsg{
+			step:     "model",
+			progress: progressPercent,
+		}
+	}
+}
+
+func installSetupEnvPlugin(plugin string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := setup.Install(plugin)
+		if err != nil {
+			return setupEnvCompleteMsg{err: fmt.Errorf("plugin install failed: %w", err)}
+		}
+
+		return setupEnvProgressMsg{
+			step:     "plugin",
+			progress: 1.0,
+		}
+	}
+}
+
+type setupEnvCompleteMsg struct{ err error }
+type setupEnvProgressMsg struct {
+	step     string // "model", "backfill", "plugin"
+	progress float64
+}
+
 // ─── Move Observation ────────────────────────────────────────────────────────
 
 func (m Model) handleMoveObservationKeys(key string) (tea.Model, tea.Cmd) {
@@ -785,4 +1006,48 @@ func (m Model) refreshScreen(screen Screen) tea.Cmd {
 	default:
 		return nil
 	}
+}
+
+// ─── Purge Database ─────────────────────────────────────────────────────────────
+
+func (m Model) handlePurgeKeys(key string) (tea.Model, tea.Cmd) {
+	// If purge is done (success), any key returns to dashboard
+	if m.PurgeResult != nil {
+		if key == "esc" || key == "q" || key == "enter" {
+			m.Screen = ScreenDashboard
+			m.Cursor = 0
+			m.PurgeConfirm = false
+			m.PurgeConfirmCursor = 0
+			m.PurgeResult = nil
+			m.PurgeError = ""
+			return m, loadStats(m.store)
+		}
+		return m, nil
+	}
+
+	switch key {
+	case "up", "k":
+		if m.PurgeConfirmCursor > 0 {
+			m.PurgeConfirmCursor--
+		}
+	case "down", "j":
+		if m.PurgeConfirmCursor < 1 {
+			m.PurgeConfirmCursor++
+		}
+	case "enter":
+		if m.PurgeConfirmCursor == 1 {
+			// User confirmed - execute purge
+			return m, purgeDatabase(m.store)
+		} else {
+			// User chose "No" - go back
+			m.Screen = ScreenDashboard
+			m.Cursor = 0
+			return m, nil
+		}
+	case "esc", "q":
+		m.Screen = ScreenDashboard
+		m.Cursor = 0
+		return m, nil
+	}
+	return m, nil
 }

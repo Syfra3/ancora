@@ -247,7 +247,9 @@ func TestViewMoveObservation(t *testing.T) {
 }
 
 func TestViewDashboardSearchAndRecent(t *testing.T) {
+	// Test with fully installed Ancora
 	m := New(nil, "")
+	m.IsFullyInstalled = true
 	m.Cursor = 1
 	m.Stats = &store.Stats{
 		TotalSessions:     3,
@@ -266,10 +268,32 @@ func TestViewDashboardSearchAndRecent(t *testing.T) {
 		t.Fatal("dashboard should show status indicator")
 	}
 	if !strings.Contains(out, "Search memories") {
-		t.Fatal("dashboard should show menu items")
+		t.Fatal("dashboard should show menu items when installed")
 	}
 	if !strings.Contains(out, "Find observations") {
-		t.Fatal("dashboard should show menu descriptions")
+		t.Fatal("dashboard should show menu descriptions when installed")
+	}
+
+	// Test with not installed Ancora
+	mNotInstalled := New(nil, "")
+	mNotInstalled.IsFullyInstalled = false
+	mNotInstalled.Cursor = 0
+
+	outNotInstalled := mNotInstalled.viewDashboard()
+	if !strings.Contains(outNotInstalled, "Setup environment") {
+		t.Fatal("dashboard should show setup option when not installed")
+	}
+	if strings.Contains(outNotInstalled, "Search memories") {
+		t.Fatal("dashboard should NOT show search option when not installed")
+	}
+	if strings.Contains(outNotInstalled, "Recent observations") {
+		t.Fatal("dashboard should NOT show recent observations option when not installed")
+	}
+	if strings.Contains(outNotInstalled, "Browse sessions") {
+		t.Fatal("dashboard should NOT show browse sessions option when not installed")
+	}
+	if !strings.Contains(outNotInstalled, "Exit") {
+		t.Fatal("dashboard should show exit option when not installed")
 	}
 
 	m.Stats = nil
@@ -418,6 +442,7 @@ func TestViewObservationDetailTimelineSessionsAndSessionDetail(t *testing.T) {
 
 func TestViewRouterCoversAllScreens(t *testing.T) {
 	m := New(nil, "")
+	m.IsFullyInstalled = true
 	m.Stats = &store.Stats{}
 	m.SearchResults = []store.SearchResult{{Observation: store.Observation{ID: 1, Type: "bugfix", Title: "t", Content: "c", CreatedAt: "now"}}}
 	m.SearchQuery = "q"

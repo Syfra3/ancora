@@ -7,6 +7,34 @@ import (
 	"github.com/Syfra3/ancora/internal/store"
 )
 
+type stubEmbedder struct {
+	vec []float32
+	err error
+}
+
+func (s stubEmbedder) Embed(_ string) ([]float32, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.vec, nil
+}
+
+func newSearchTestStore(t *testing.T) *store.Store {
+	t.Helper()
+	cfg, err := store.DefaultConfig()
+	if err != nil {
+		t.Fatalf("DefaultConfig: %v", err)
+	}
+	cfg.DataDir = t.TempDir()
+
+	s, err := store.New(cfg)
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
 // TestRRFScoring verifies the RRF fusion formula and ordering.
 func TestRRFScoring(t *testing.T) {
 	// Build two ranked lists with overlapping and disjoint results.
@@ -100,5 +128,96 @@ func TestModeKeywordWhenNoSemResults(t *testing.T) {
 
 	if mode != ModeKeyword {
 		t.Errorf("expected ModeKeyword, got %q", mode)
+	}
+}
+
+func TestSearchWithOptionsWithoutProjectSearchesAllProjects(t *testing.T) {
+	s := newSearchTestStore(t)
+	for _, session := range []struct {
+		id      string
+		project string
+	}{
+		{id: "s-alpha", project: "alpha"},
+		{id: "s-beta", project: "beta"},
+	} {
+		if err := s.CreateSession(session.id, session.project, ""); err != nil {
+			t.Fatalf("create session %s: %v", session.id, err)
+		}
+	}
+	for _, obs := range []store.AddObservationParams{
+		{SessionID: "s-alpha", Type: "decision", Title: "Alpha hit", Content: "shared-search-term alpha", Project: "alpha", Scope: "project"},
+		{SessionID: "s-beta", Type: "decision", Title: "Beta hit", Content: "shared-search-term beta", Project: "beta", Scope: "project"},
+	} {
+		if _, err := s.AddObservation(obs); err != nil {
+			t.Fatalf("AddObservation %q: %v", obs.Title, err)
+		}
+	}
+
+	results, mode, err := SearchWithOptions("shared-search-term", store.SearchOptions{Limit: 10}, nil, s)
+	if err != nil {
+		t.Fatalf("SearchWithOptions: %v", err)
+	}
+	if mode != ModeKeyword {
+		t.Fatalf("expected keyword mode without embedder, got %q", mode)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 cross-project results, got %d", len(results))
+	}
+}
+
+func TestSearchWithOptionsHybridHonorsExplicitProjectFilter(t *testing.T) {
+	s := newSearchTestStore(t)
+	for _, session := range []struct {
+		id      string
+		project string
+	}{
+		{id: "s-alpha", project: "alpha"},
+		{id: "s-beta", project: "beta"},
+	} {
+		if err := s.CreateSession(session.id, session.project, ""); err != nil {
+			t.Fatalf("create session %s: %v", session.id, err)
+		}
+	}
+
+	alphaID, err := s.AddObservation(store.AddObservationParams{
+		SessionID: "s-alpha",
+		Type:      "decision",
+		Title:     "Alpha semantic hit",
+		Content:   "shared semantic token",
+		Project:   "alpha",
+		Scope:     "project",
+	})
+	if err != nil {
+		t.Fatalf("add alpha observation: %v", err)
+	}
+	betaID, err := s.AddObservation(store.AddObservationParams{
+		SessionID: "s-beta",
+		Type:      "decision",
+		Title:     "Beta semantic hit",
+		Content:   "shared semantic token",
+		Project:   "beta",
+		Scope:     "project",
+	})
+	if err != nil {
+		t.Fatalf("add beta observation: %v", err)
+	}
+
+	vec := []float32{0.42, 0.11}
+	if err := s.SetEmbedding(alphaID, vec); err != nil {
+		t.Fatalf("set alpha embedding: %v", err)
+	}
+	if err := s.SetEmbedding(betaID, vec); err != nil {
+		t.Fatalf("set beta embedding: %v", err)
+	}
+
+	results, mode, err := SearchWithOptions("shared semantic token", store.SearchOptions{Project: "alpha", Limit: 10}, stubEmbedder{vec: vec}, s)
+	if err != nil {
+		t.Fatalf("SearchWithOptions: %v", err)
+	}
+	if mode != ModeHybrid {
+		t.Fatalf("expected hybrid mode, got %q", mode)
+	}
+	if len(results) != 1 || results[0].Title != "Alpha semantic hit" {
+		t.Fatalf("expected explicit project filter to keep only alpha result, got %#v", results)
 	}
 }
