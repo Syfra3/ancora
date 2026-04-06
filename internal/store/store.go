@@ -37,15 +37,23 @@ type Session struct {
 }
 
 type Observation struct {
-	ID             int64   `json:"id"`
-	SyncID         string  `json:"sync_id"`
-	SessionID      string  `json:"session_id"`
-	Type           string  `json:"type"`
-	Title          string  `json:"title"`
-	Content        string  `json:"content"`
-	ToolName       *string `json:"tool_name,omitempty"`
-	Project        *string `json:"project,omitempty"`
-	Scope          string  `json:"scope"`
+	ID        int64   `json:"id"`
+	SyncID    string  `json:"sync_id"`
+	SessionID string  `json:"session_id"`
+	Type      string  `json:"type"`
+	Title     string  `json:"title"`
+	Content   string  `json:"content"`
+	ToolName  *string `json:"tool_name,omitempty"`
+
+	// Legacy fields (deprecated but kept for backward compat - PR2)
+	Project *string `json:"project,omitempty"`
+	Scope   string  `json:"scope"`
+
+	// New schema fields (PR2)
+	Workspace    *string `json:"workspace,omitempty"`
+	Visibility   string  `json:"visibility"`
+	Organization *string `json:"organization,omitempty"`
+
 	TopicKey       *string `json:"topic_key,omitempty"`
 	RevisionCount  int     `json:"revision_count"`
 	DuplicateCount int     `json:"duplicate_count"`
@@ -77,14 +85,22 @@ type Stats struct {
 }
 
 type TimelineEntry struct {
-	ID             int64   `json:"id"`
-	SessionID      string  `json:"session_id"`
-	Type           string  `json:"type"`
-	Title          string  `json:"title"`
-	Content        string  `json:"content"`
-	ToolName       *string `json:"tool_name,omitempty"`
-	Project        *string `json:"project,omitempty"`
-	Scope          string  `json:"scope"`
+	ID        int64   `json:"id"`
+	SessionID string  `json:"session_id"`
+	Type      string  `json:"type"`
+	Title     string  `json:"title"`
+	Content   string  `json:"content"`
+	ToolName  *string `json:"tool_name,omitempty"`
+
+	// Legacy fields (deprecated but kept for backward compat - PR2)
+	Project *string `json:"project,omitempty"`
+	Scope   string  `json:"scope"`
+
+	// New schema fields (PR2)
+	Workspace    *string `json:"workspace,omitempty"`
+	Visibility   string  `json:"visibility"`
+	Organization *string `json:"organization,omitempty"`
+
 	TopicKey       *string `json:"topic_key,omitempty"`
 	RevisionCount  int     `json:"revision_count"`
 	DuplicateCount int     `json:"duplicate_count"`
@@ -104,10 +120,18 @@ type TimelineResult struct {
 }
 
 type SearchOptions struct {
-	Type    string `json:"type,omitempty"`
+	Type string `json:"type,omitempty"`
+
+	// Legacy fields (deprecated but kept for backward compat - PR2)
 	Project string `json:"project,omitempty"`
 	Scope   string `json:"scope,omitempty"`
-	Limit   int    `json:"limit,omitempty"`
+
+	// New schema fields (PR2)
+	Workspace    string `json:"workspace,omitempty"`
+	Visibility   string `json:"visibility,omitempty"`
+	Organization string `json:"organization,omitempty"`
+
+	Limit int `json:"limit,omitempty"`
 }
 
 type AddObservationParams struct {
@@ -116,17 +140,33 @@ type AddObservationParams struct {
 	Title     string `json:"title"`
 	Content   string `json:"content"`
 	ToolName  string `json:"tool_name,omitempty"`
-	Project   string `json:"project,omitempty"`
-	Scope     string `json:"scope,omitempty"`
-	TopicKey  string `json:"topic_key,omitempty"`
+
+	// Legacy fields (deprecated but kept for backward compat - PR2)
+	Project string `json:"project,omitempty"`
+	Scope   string `json:"scope,omitempty"`
+
+	// New schema fields (PR2)
+	Workspace    string `json:"workspace,omitempty"`
+	Visibility   string `json:"visibility,omitempty"`
+	Organization string `json:"organization,omitempty"`
+
+	TopicKey string `json:"topic_key,omitempty"`
 }
 
 type UpdateObservationParams struct {
-	Type     *string `json:"type,omitempty"`
-	Title    *string `json:"title,omitempty"`
-	Content  *string `json:"content,omitempty"`
-	Project  *string `json:"project,omitempty"`
-	Scope    *string `json:"scope,omitempty"`
+	Type    *string `json:"type,omitempty"`
+	Title   *string `json:"title,omitempty"`
+	Content *string `json:"content,omitempty"`
+
+	// Legacy fields (deprecated but kept for backward compat - PR2)
+	Project *string `json:"project,omitempty"`
+	Scope   *string `json:"scope,omitempty"`
+
+	// New schema fields (PR2)
+	Workspace    *string `json:"workspace,omitempty"`
+	Visibility   *string `json:"visibility,omitempty"`
+	Organization *string `json:"organization,omitempty"`
+
 	TopicKey *string `json:"topic_key,omitempty"`
 }
 
@@ -207,14 +247,22 @@ type syncSessionPayload struct {
 }
 
 type syncObservationPayload struct {
-	SyncID     string  `json:"sync_id"`
-	SessionID  string  `json:"session_id"`
-	Type       string  `json:"type"`
-	Title      string  `json:"title"`
-	Content    string  `json:"content"`
-	ToolName   *string `json:"tool_name,omitempty"`
-	Project    *string `json:"project,omitempty"`
-	Scope      string  `json:"scope"`
+	SyncID    string  `json:"sync_id"`
+	SessionID string  `json:"session_id"`
+	Type      string  `json:"type"`
+	Title     string  `json:"title"`
+	Content   string  `json:"content"`
+	ToolName  *string `json:"tool_name,omitempty"`
+
+	// Legacy fields (deprecated but kept for backward compat - PR2)
+	Project *string `json:"project,omitempty"`
+	Scope   string  `json:"scope"`
+
+	// New schema fields (PR2)
+	Workspace    *string `json:"workspace,omitempty"`
+	Visibility   string  `json:"visibility"`
+	Organization *string `json:"organization,omitempty"`
+
 	TopicKey   *string `json:"topic_key,omitempty"`
 	Deleted    bool    `json:"deleted,omitempty"`
 	DeletedAt  *string `json:"deleted_at,omitempty"`
@@ -927,20 +975,24 @@ func (s *Store) AllObservations(project, scope string, limit int) ([]Observation
 	}
 
 	query := `
-		SELECT o.id, ifnull(o.sync_id, '') as sync_id, o.session_id, o.type, o.title, o.content, o.tool_name, o.project,
-		       o.scope, o.topic_key, o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at
+		SELECT o.id, ifnull(o.sync_id, '') as sync_id, o.session_id, o.type, o.title, o.content, o.tool_name,
+		       o.project, o.scope,
+		       o.workspace, o.visibility, o.organization,
+		       o.topic_key, o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at
 		FROM observations o
 		WHERE o.deleted_at IS NULL
 	`
 	args := []any{}
 
+	// PR2: Support both old and new filter fields (legacy project/scope OR new workspace/visibility)
 	if project != "" {
-		query += " AND o.project = ?"
-		args = append(args, project)
+		query += " AND (o.project = ? OR o.workspace = ?)"
+		args = append(args, project, project)
 	}
 	if scope != "" {
-		query += " AND o.scope = ?"
-		args = append(args, normalizeScope(scope))
+		normalizedScope := normalizeScope(scope)
+		query += " AND (o.scope = ? OR o.visibility = ?)"
+		args = append(args, normalizedScope, normalizedScope)
 	}
 
 	query += " ORDER BY o.created_at DESC LIMIT ?"
@@ -956,8 +1008,10 @@ func (s *Store) SessionObservations(sessionID string, limit int) ([]Observation,
 	}
 
 	query := `
-		SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, project,
-		       scope, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+		SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name,
+		       project, scope,
+		       workspace, visibility, organization,
+		       topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		FROM observations
 		WHERE session_id = ? AND deleted_at IS NULL
 		ORDER BY created_at ASC
@@ -969,8 +1023,24 @@ func (s *Store) SessionObservations(sessionID string, limit int) ([]Observation,
 // ─── Observations ────────────────────────────────────────────────────────────
 
 func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
-	// Normalize project name (lowercase + trim) before any persistence
+	// PR2: Dual-write strategy - populate both old and new fields
+	// If new fields provided, use them; otherwise use old fields
+	if p.Workspace == "" && p.Project != "" {
+		p.Workspace = p.Project
+	}
+	if p.Visibility == "" && p.Scope != "" {
+		p.Visibility = p.Scope
+	}
+	if p.Workspace != "" && p.Project == "" {
+		p.Project = p.Workspace
+	}
+	if p.Visibility != "" && p.Scope == "" {
+		p.Scope = p.Visibility
+	}
+
+	// Normalize project/workspace name (lowercase + trim) before any persistence
 	p.Project, _ = NormalizeProject(p.Project)
+	p.Workspace, _ = NormalizeProject(p.Workspace)
 
 	// Strip <private>...</private> tags before persisting ANYTHING
 	title := stripPrivateTags(p.Title)
@@ -980,6 +1050,7 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 		content = content[:s.cfg.MaxObservationLength] + "... [truncated]"
 	}
 	scope := normalizeScope(p.Scope)
+	visibility := normalizeScope(p.Visibility) // PR2: normalize visibility too
 	normHash := hashNormalized(content)
 	topicKey := normalizeTopicKey(p.TopicKey)
 
@@ -1071,11 +1142,20 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 		}
 
 		syncID := newSyncID("obs")
+		// PR2: Dual-write to both old and new columns
 		res, err := s.execHook(tx,
-			`INSERT INTO observations (sync_id, session_id, type, title, content, tool_name, project, scope, topic_key, normalized_hash, revision_count, duplicate_count, last_seen_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), datetime('now'))`,
+			`INSERT INTO observations (
+				sync_id, session_id, type, title, content, tool_name,
+				project, scope,
+				workspace, visibility, organization,
+				topic_key, normalized_hash, revision_count, duplicate_count, last_seen_at, updated_at
+			)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), datetime('now'))`,
 			syncID, p.SessionID, p.Type, title, content,
-			nullableString(p.ToolName), nullableString(p.Project), scope, nullableString(topicKey), normHash,
+			nullableString(p.ToolName),
+			nullableString(p.Project), scope,
+			nullableString(p.Workspace), visibility, nullableString(p.Organization),
+			nullableString(topicKey), normHash,
 		)
 		if err != nil {
 			return err
@@ -1105,20 +1185,24 @@ func (s *Store) RecentObservations(project, scope string, limit int) ([]Observat
 	}
 
 	query := `
-		SELECT o.id, ifnull(o.sync_id, '') as sync_id, o.session_id, o.type, o.title, o.content, o.tool_name, o.project,
-		       o.scope, o.topic_key, o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at
+		SELECT o.id, ifnull(o.sync_id, '') as sync_id, o.session_id, o.type, o.title, o.content, o.tool_name,
+		       o.project, o.scope,
+		       o.workspace, o.visibility, o.organization,
+		       o.topic_key, o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at
 		FROM observations o
 		WHERE o.deleted_at IS NULL
 	`
 	args := []any{}
 
+	// PR2: Support both old and new filter fields
 	if project != "" {
-		query += " AND o.project = ?"
-		args = append(args, project)
+		query += " AND (o.project = ? OR o.workspace = ?)"
+		args = append(args, project, project)
 	}
 	if scope != "" {
-		query += " AND o.scope = ?"
-		args = append(args, normalizeScope(scope))
+		normalizedScope := normalizeScope(scope)
+		query += " AND (o.scope = ? OR o.visibility = ?)"
+		args = append(args, normalizedScope, normalizedScope)
 	}
 
 	query += " ORDER BY o.created_at DESC LIMIT ?"
@@ -1245,14 +1329,20 @@ func (s *Store) SearchPrompts(query string, project string, limit int) ([]Prompt
 
 func (s *Store) GetObservation(id int64) (*Observation, error) {
 	row := s.db.QueryRow(
-		`SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, project,
-		        scope, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+		`SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name,
+		        project, scope,
+		        workspace, visibility, organization,
+		        topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		 FROM observations WHERE id = ? AND deleted_at IS NULL`, id,
 	)
 	var o Observation
+	// PR2: Scan both old and new fields
 	if err := row.Scan(
 		&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content,
-		&o.ToolName, &o.Project, &o.Scope, &o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
+		&o.ToolName,
+		&o.Project, &o.Scope,
+		&o.Workspace, &o.Visibility, &o.Organization,
+		&o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
 		&o.CreatedAt, &o.UpdatedAt, &o.DeletedAt,
 	); err != nil {
 		return nil, err
@@ -1891,8 +1981,10 @@ func (s *Store) Export() (*ExportData, error) {
 
 	// Observations
 	obsRows, err := s.queryItHook(s.db,
-		`SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, project,
-		        scope, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+		`SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name,
+		        project, scope,
+		        workspace, visibility, organization,
+		        topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		 FROM observations ORDER BY id`,
 	)
 	if err != nil {
@@ -1901,9 +1993,13 @@ func (s *Store) Export() (*ExportData, error) {
 	defer obsRows.Close()
 	for obsRows.Next() {
 		var o Observation
+		// PR2: Scan both old and new fields
 		if err := obsRows.Scan(
 			&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content,
-			&o.ToolName, &o.Project, &o.Scope, &o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
+			&o.ToolName,
+			&o.Project, &o.Scope,
+			&o.Workspace, &o.Visibility, &o.Organization,
+			&o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
 			&o.CreatedAt, &o.UpdatedAt, &o.DeletedAt,
 		); err != nil {
 			return nil, err
@@ -2440,8 +2536,10 @@ func (s *Store) MigrateProject(oldName, newName string) (*MigrateResult, error) 
 	result := &MigrateResult{Migrated: true}
 
 	err = s.withTx(func(tx *sql.Tx) error {
+		// PR2: Update BOTH old and new fields
 		// FTS triggers handle index updates automatically on UPDATE
-		res, err := s.execHook(tx, `UPDATE observations SET project = ? WHERE project = ?`, newName, oldName)
+		res, err := s.execHook(tx, `UPDATE observations SET project = ?, workspace = ? WHERE project = ? OR workspace = ?`,
+			newName, newName, oldName, oldName)
 		if err != nil {
 			return fmt.Errorf("migrate observations: %w", err)
 		}
@@ -2667,7 +2765,9 @@ func (s *Store) MergeProjects(sources []string, canonical string) (*MergeResult,
 				continue
 			}
 
-			res, err := s.execHook(tx, `UPDATE observations SET project = ? WHERE project = ?`, canonical, src)
+			// PR2: Update BOTH old and new fields
+			res, err := s.execHook(tx, `UPDATE observations SET project = ?, workspace = ? WHERE project = ? OR workspace = ?`,
+				canonical, canonical, src, src)
 			if err != nil {
 				return fmt.Errorf("merge observations %q → %q: %w", src, canonical, err)
 			}
@@ -3228,9 +3328,13 @@ func (s *Store) queryObservations(query string, args ...any) ([]Observation, err
 	var results []Observation
 	for rows.Next() {
 		var o Observation
+		// PR2: Scan both old and new fields
 		if err := rows.Scan(
 			&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content,
-			&o.ToolName, &o.Project, &o.Scope, &o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
+			&o.ToolName,
+			&o.Project, &o.Scope, // old fields
+			&o.Workspace, &o.Visibility, &o.Organization, // new fields
+			&o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
 			&o.CreatedAt, &o.UpdatedAt, &o.DeletedAt,
 		); err != nil {
 			return nil, err
