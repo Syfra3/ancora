@@ -175,6 +175,36 @@ syfra export backup.json
 syfra import backup.json
 ```
 
+### Interactive TUI
+
+Ancora includes a beautiful terminal user interface for browsing and managing your memories:
+
+```bash
+syfra tui
+```
+
+<!-- Uncomment when TUI screenshot is added
+<div align="center">
+  <img src="assets/ancora-tui.png" alt="Ancora TUI Dashboard" width="800"/>
+</div>
+-->
+
+**TUI Features:**
+- 🔍 **Search memories** - Find observations by content or metadata
+- 📋 **Recent observations** - Browse latest saved memories
+- 📅 **Browse sessions** - View all coding sessions
+- 📂 **Browse projects** - View projects with sync status and scope
+- 🔄 **Upgrade/Update environment** - Update embedding model and plugins
+- 🗑️ **Purge database** - DELETE ALL data (observations, sessions, prompts)
+- 🚪 **Exit** - Close the TUI
+
+**Navigation:**
+- `↑/↓` - Navigate menu items
+- `Enter` - Select option
+- `p` - Jump to projects view
+- `s` - Jump to search
+- `q` - Quit/exit
+
 ## Features
 
 - **15 MCP Tools** - Full memory management suite (ancora_save, ancora_search, ancora_context, etc.)
