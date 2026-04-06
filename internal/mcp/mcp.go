@@ -10,7 +10,7 @@
 //	ancora mcp --tools=agent      → 11 tools agents actually use (per skill files)
 //	ancora mcp --tools=admin      → 4 tools for TUI/CLI (delete, stats, timeline, merge)
 //	ancora mcp --tools=agent,admin → combine profiles
-//	ancora mcp --tools=mem_save,mem_search → individual tool names
+//	ancora mcp --tools=ancora_save,ancora_search → individual tool names
 package mcp
 
 import (
@@ -18,11 +18,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
 	projectpkg "github.com/Syfra3/ancora/internal/project"
 	"github.com/Syfra3/ancora/internal/search"
 	"github.com/Syfra3/ancora/internal/store"
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 // Embedder is the interface for generating float32 query vectors.
@@ -46,12 +46,12 @@ var loadMCPStats = func(s *store.Store) (*store.Stats, error) {
 // ─── Tool Profiles ───────────────────────────────────────────────────────────
 //
 // "agent" — tools AI agents use during coding sessions:
-//   mem_save, mem_search, mem_context, mem_session_summary,
-//   mem_session_start, mem_session_end, mem_get_observation,
-//   mem_suggest_topic_key, mem_capture_passive, mem_save_prompt
+//   ancora_save, ancora_search, ancora_context, ancora_summarize,
+//   ancora_start, ancora_end, ancora_get,
+//   ancora_suggest_topic, ancora_capture, ancora_save_prompt
 //
 // "admin" — tools for manual curation, TUI, and dashboards:
-//   mem_update, mem_delete, mem_stats, mem_timeline, mem_merge_projects
+//   ancora_update, ancora_delete, ancora_stats, ancora_timeline, ancora_merge
 //
 // "all" (default) — every tool registered.
 
@@ -59,26 +59,26 @@ var loadMCPStats = func(s *store.Store) (*store.Stats, error) {
 // Sourced from actual skill files and memory protocol instructions
 // across all 4 supported agents (Claude Code, OpenCode, Gemini CLI, Codex).
 var ProfileAgent = map[string]bool{
-	"mem_save":              true, // proactive save — referenced 17 times across protocols
-	"mem_search":            true, // search past memories — referenced 6 times
-	"mem_context":           true, // recent context from previous sessions — referenced 10 times
-	"mem_session_summary":   true, // end-of-session summary — referenced 16 times
-	"mem_session_start":     true, // register session start
-	"mem_session_end":       true, // mark session completed
-	"mem_get_observation":   true, // full observation content after search — referenced 4 times
-	"mem_suggest_topic_key": true, // stable topic key for upserts — referenced 3 times
-	"mem_capture_passive":   true, // extract learnings from text — referenced in Gemini/Codex protocol
-	"mem_save_prompt":       true, // save user prompts
-	"mem_update":            true, // update observation by ID — skills say "use mem_update when you have an exact ID to correct"
+	"save":          true, // proactive save — referenced 17 times across protocols
+	"search":        true, // search past memories — referenced 6 times
+	"context":       true, // recent context from previous sessions — referenced 10 times
+	"summarize":     true, // end-of-session summary — referenced 16 times
+	"start":         true, // register session start
+	"end":           true, // mark session completed
+	"get":           true, // full observation content after search — referenced 4 times
+	"suggest_topic": true, // stable topic key for upserts — referenced 3 times
+	"capture":       true, // extract learnings from text — referenced in Gemini/Codex protocol
+	"save_prompt":   true, // save user prompts
+	"update":        true, // update observation by ID — skills say "use ancora_update when you have an exact ID to correct"
 }
 
 // ProfileAdmin contains tools for TUI, dashboards, and manual curation
 // that are NOT referenced in any agent skill or memory protocol.
 var ProfileAdmin = map[string]bool{
-	"mem_delete":         true, // only in OpenCode's ANCORA_TOOLS filter, not in any agent instructions
-	"mem_stats":          true, // only in OpenCode's ANCORA_TOOLS filter, not in any agent instructions
-	"mem_timeline":       true, // only in OpenCode's ANCORA_TOOLS filter, not in any agent instructions
-	"mem_merge_projects": true, // destructive curation tool — not for agent use
+	"delete":   true, // only in OpenCode's ANCORA_TOOLS filter, not in any agent instructions
+	"stats":    true, // only in OpenCode's ANCORA_TOOLS filter, not in any agent instructions
+	"timeline": true, // only in OpenCode's ANCORA_TOOLS filter, not in any agent instructions
+	"merge":    true, // destructive curation tool — not for agent use
 }
 
 // Profiles maps profile names to their tool sets.
@@ -132,18 +132,18 @@ func NewServer(s *store.Store) *server.MCPServer {
 const serverInstructions = `Ancora provides persistent memory that survives across sessions and compactions.
 
 CORE TOOLS (always available — use without ToolSearch):
-  mem_save — save decisions, bugs, discoveries, conventions PROACTIVELY (do not wait to be asked)
-  mem_search — find past work, decisions, or context from previous sessions
-  mem_context — get recent session history (call at session start or after compaction)
-  mem_session_summary — save end-of-session summary (MANDATORY before saying "done")
-  mem_get_observation — get full untruncated content of a search result by ID
-  mem_save_prompt — save user prompt for context
+  ancora_save — save decisions, bugs, discoveries, conventions PROACTIVELY (do not wait to be asked)
+  ancora_search — find past work, decisions, or context from previous sessions
+  ancora_context — get recent session history (call at session start or after compaction)
+  ancora_summarize — save end-of-session summary (MANDATORY before saying "done")
+  ancora_get — get full untruncated content of a search result by ID
+  ancora_save_prompt — save user prompt for context
 
 DEFERRED TOOLS (use ToolSearch when needed):
-  mem_update, mem_suggest_topic_key, mem_session_start, mem_session_end,
-  mem_stats, mem_delete, mem_timeline, mem_capture_passive, mem_merge_projects
+  ancora_update, ancora_suggest_topic, ancora_start, ancora_end,
+  ancora_stats, ancora_delete, ancora_timeline, ancora_capture, ancora_merge
 
-PROACTIVE SAVE RULE: Call mem_save immediately after ANY decision, bug fix, discovery, or convention — not just when asked.`
+PROACTIVE SAVE RULE: Call ancora_save immediately after ANY decision, bug fix, discovery, or convention — not just when asked.`
 
 // NewServerWithTools creates an MCP server registering only the tools in
 // the allowlist. If allowlist is nil, all tools are registered.
@@ -175,10 +175,10 @@ func shouldRegister(name string, allowlist map[string]bool) bool {
 }
 
 func registerTools(srv *server.MCPServer, s *store.Store, cfg MCPConfig, allowlist map[string]bool) {
-	// ─── mem_search (profile: agent, core — always in context) ─────────
-	if shouldRegister("mem_search", allowlist) {
+	// ─── search (profile: agent, core — always in context) ─────────
+	if shouldRegister("search", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_search",
+			mcp.NewTool("search",
 				mcp.WithDescription("Search your persistent memory across all sessions. Use this to find past decisions, bugs fixed, patterns used, files changed, or any context from previous coding sessions."),
 				mcp.WithTitleAnnotation("Search Memory"),
 				mcp.WithReadOnlyHintAnnotation(true),
@@ -206,10 +206,10 @@ func registerTools(srv *server.MCPServer, s *store.Store, cfg MCPConfig, allowli
 		)
 	}
 
-	// ─── mem_save (profile: agent, core — always in context) ───────────
-	if shouldRegister("mem_save", allowlist) {
+	// ─── save (profile: agent, core — always in context) ───────────
+	if shouldRegister("save", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_save",
+			mcp.NewTool("save",
 				mcp.WithTitleAnnotation("Save Memory"),
 				mcp.WithReadOnlyHintAnnotation(false),
 				mcp.WithDestructiveHintAnnotation(false),
@@ -269,10 +269,10 @@ Examples:
 		)
 	}
 
-	// ─── mem_update (profile: agent, deferred) ──────────────────────────
-	if shouldRegister("mem_update", allowlist) {
+	// ─── update (profile: agent, deferred) ──────────────────────────
+	if shouldRegister("update", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_update",
+			mcp.NewTool("update",
 				mcp.WithDescription("Update an existing observation by ID. Only provided fields are changed."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Update Memory"),
@@ -307,11 +307,11 @@ Examples:
 		)
 	}
 
-	// ─── mem_suggest_topic_key (profile: agent, deferred) ───────────────
-	if shouldRegister("mem_suggest_topic_key", allowlist) {
+	// ─── suggest_topic (profile: agent, deferred) ───────────────
+	if shouldRegister("suggest_topic", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_suggest_topic_key",
-				mcp.WithDescription("Suggest a stable topic_key for memory upserts. Use this before mem_save when you want evolving topics (like architecture decisions) to update a single observation over time."),
+			mcp.NewTool("suggest_topic",
+				mcp.WithDescription("Suggest a stable topic_key for memory upserts. Use this before ancora_save when you want evolving topics (like architecture decisions) to update a single observation over time."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Suggest Topic Key"),
 				mcp.WithReadOnlyHintAnnotation(true),
@@ -332,10 +332,10 @@ Examples:
 		)
 	}
 
-	// ─── mem_delete (profile: admin, deferred) ──────────────────────────
-	if shouldRegister("mem_delete", allowlist) {
+	// ─── delete (profile: admin, deferred) ──────────────────────────
+	if shouldRegister("delete", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_delete",
+			mcp.NewTool("delete",
 				mcp.WithDescription("Delete an observation by ID. Soft-delete by default; set hard_delete=true for permanent deletion."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Delete Memory"),
@@ -355,10 +355,10 @@ Examples:
 		)
 	}
 
-	// ─── mem_save_prompt (profile: agent, eager) ────────────────────────
-	if shouldRegister("mem_save_prompt", allowlist) {
+	// ─── save_prompt (profile: agent, eager) ────────────────────────
+	if shouldRegister("save_prompt", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_save_prompt",
+			mcp.NewTool("save_prompt",
 				mcp.WithDescription("Save a user prompt to persistent memory. Use this to record what the user asked — their intent, questions, and requests — so future sessions have context about the user's goals."),
 				mcp.WithTitleAnnotation("Save User Prompt"),
 				mcp.WithReadOnlyHintAnnotation(false),
@@ -380,10 +380,10 @@ Examples:
 		)
 	}
 
-	// ─── mem_context (profile: agent, core — always in context) ────────
-	if shouldRegister("mem_context", allowlist) {
+	// ─── context (profile: agent, core — always in context) ────────
+	if shouldRegister("context", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_context",
+			mcp.NewTool("context",
 				mcp.WithDescription("Get recent memory context from previous sessions. Shows recent sessions and observations to understand what was done before."),
 				mcp.WithTitleAnnotation("Get Memory Context"),
 				mcp.WithReadOnlyHintAnnotation(true),
@@ -404,10 +404,10 @@ Examples:
 		)
 	}
 
-	// ─── mem_stats (profile: admin, deferred) ───────────────────────────
-	if shouldRegister("mem_stats", allowlist) {
+	// ─── stats (profile: admin, deferred) ───────────────────────────
+	if shouldRegister("stats", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_stats",
+			mcp.NewTool("stats",
 				mcp.WithDescription("Show memory system statistics — total sessions, observations, and projects tracked."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Memory Stats"),
@@ -420,11 +420,11 @@ Examples:
 		)
 	}
 
-	// ─── mem_timeline (profile: admin, deferred) ────────────────────────
-	if shouldRegister("mem_timeline", allowlist) {
+	// ─── timeline (profile: admin, deferred) ────────────────────────
+	if shouldRegister("timeline", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_timeline",
-				mcp.WithDescription("Show chronological context around a specific observation. Use after mem_search to drill into the timeline of events surrounding a search result. This is the progressive disclosure pattern: search first, then timeline to understand context."),
+			mcp.NewTool("timeline",
+				mcp.WithDescription("Show chronological context around a specific observation. Use after ancora_search to drill into the timeline of events surrounding a search result. This is the progressive disclosure pattern: search first, then timeline to understand context."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Memory Timeline"),
 				mcp.WithReadOnlyHintAnnotation(true),
@@ -433,7 +433,7 @@ Examples:
 				mcp.WithOpenWorldHintAnnotation(false),
 				mcp.WithNumber("observation_id",
 					mcp.Required(),
-					mcp.Description("The observation ID to center the timeline on (from mem_search results)"),
+					mcp.Description("The observation ID to center the timeline on (from ancora_search results)"),
 				),
 				mcp.WithNumber("before",
 					mcp.Description("Number of observations to show before the focus (default: 5)"),
@@ -446,11 +446,11 @@ Examples:
 		)
 	}
 
-	// ─── mem_get_observation (profile: agent, eager) ────────────────────
-	if shouldRegister("mem_get_observation", allowlist) {
+	// ─── get (profile: agent, eager) ────────────────────
+	if shouldRegister("get", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_get_observation",
-				mcp.WithDescription("Get the full content of a specific observation by ID. Use when you need the complete, untruncated content of an observation found via mem_search or mem_timeline."),
+			mcp.NewTool("get",
+				mcp.WithDescription("Get the full content of a specific observation by ID. Use when you need the complete, untruncated content of an observation found via ancora_search or ancora_timeline."),
 				mcp.WithTitleAnnotation("Get Observation"),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithDestructiveHintAnnotation(false),
@@ -465,10 +465,10 @@ Examples:
 		)
 	}
 
-	// ─── mem_session_summary (profile: agent, core — always in context) ─
-	if shouldRegister("mem_session_summary", allowlist) {
+	// ─── summarize (profile: agent, core — always in context) ─
+	if shouldRegister("summarize", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_session_summary",
+			mcp.NewTool("summarize",
 				mcp.WithTitleAnnotation("Save Session Summary"),
 				mcp.WithReadOnlyHintAnnotation(false),
 				mcp.WithDestructiveHintAnnotation(false),
@@ -520,10 +520,10 @@ GUIDELINES:
 		)
 	}
 
-	// ─── mem_session_start (profile: agent, deferred) ───────────────────
-	if shouldRegister("mem_session_start", allowlist) {
+	// ─── start (profile: agent, deferred) ───────────────────
+	if shouldRegister("start", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_session_start",
+			mcp.NewTool("start",
 				mcp.WithDescription("Register the start of a new coding session. Call this at the beginning of a session to track activity."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Start Session"),
@@ -547,10 +547,10 @@ GUIDELINES:
 		)
 	}
 
-	// ─── mem_session_end (profile: agent, deferred) ─────────────────────
-	if shouldRegister("mem_session_end", allowlist) {
+	// ─── end (profile: agent, deferred) ─────────────────────
+	if shouldRegister("end", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_session_end",
+			mcp.NewTool("end",
 				mcp.WithDescription("Mark a coding session as completed with an optional summary."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("End Session"),
@@ -570,10 +570,10 @@ GUIDELINES:
 		)
 	}
 
-	// ─── mem_capture_passive (profile: agent, deferred) ─────────────────
-	if shouldRegister("mem_capture_passive", allowlist) {
+	// ─── capture (profile: agent, deferred) ─────────────────
+	if shouldRegister("capture", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_capture_passive",
+			mcp.NewTool("capture",
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Capture Learnings"),
 				mcp.WithReadOnlyHintAnnotation(false),
@@ -603,10 +603,10 @@ Duplicates are automatically detected and skipped — safe to call multiple time
 		)
 	}
 
-	// ─── mem_merge_projects (profile: admin, deferred) ──────────────────
-	if shouldRegister("mem_merge_projects", allowlist) {
+	// ─── merge (profile: admin, deferred) ──────────────────
+	if shouldRegister("merge", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_merge_projects",
+			mcp.NewTool("merge",
 				mcp.WithDescription("Merge memories from multiple project name variants into one canonical name. Use when you discover project name drift (e.g. 'MyProject' and 'myproject' should be the same project). DESTRUCTIVE — moves all records from source names to the canonical name."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Merge Projects"),
@@ -711,7 +711,7 @@ func handleSearch(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 				r.CreatedAt, projectDisplay, r.Scope)
 		}
 		if anyTruncated {
-			fmt.Fprintf(&b, "---\nResults above are previews (300 chars). To read the full content of a specific memory, call mem_get_observation(id: <ID>).\n")
+			fmt.Fprintf(&b, "---\nResults above are previews (300 chars). To read the full content of a specific memory, call ancora_get(id: <ID>).\n")
 		}
 
 		return mcp.NewToolResultText(b.String()), nil
