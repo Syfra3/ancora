@@ -622,7 +622,7 @@ func (s *Store) migrate() error {
 		return err
 	}
 
-	if _, err := s.execHook(s.db, `UPDATE observations SET scope = 'project' WHERE scope IS NULL OR scope = ''`); err != nil {
+	if _, err := s.execHook(s.db, `UPDATE observations SET scope = 'work', visibility = 'work' WHERE scope IS NULL OR scope = ''`); err != nil {
 		return err
 	}
 	if _, err := s.execHook(s.db, `UPDATE observations SET topic_key = NULL WHERE topic_key = ''`); err != nil {
@@ -2686,7 +2686,7 @@ func (s *Store) ListProjectsWithStats() ([]ProjectStats, error) {
 func (s *Store) CountObservationsForProject(name string) (int, error) {
 	var count int
 	err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM observations WHERE project = ? AND deleted_at IS NULL`,
+		`SELECT COUNT(*) FROM observations WHERE workspace = ? AND deleted_at IS NULL`,
 		name,
 	).Scan(&count)
 	return count, err
