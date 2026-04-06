@@ -689,11 +689,11 @@ func handleSearch(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		}
 
 		if len(results) == 0 {
-			return mcp.NewToolResultText(fmt.Sprintf("No memories found for: %q", query)), nil
+			return mcp.NewToolResultText(fmt.Sprintf("**Searching:** %s\n\nNo memories found.", query)), nil
 		}
 
 		var b strings.Builder
-		fmt.Fprintf(&b, "Found %d memories (search_mode: %s):\n\n", len(results), searchMode)
+		fmt.Fprintf(&b, "**Searching:** %s\n\nFound %d memories (search_mode: %s):\n\n", query, len(results), searchMode)
 		anyTruncated := false
 		for i, r := range results {
 			projectDisplay := ""
@@ -784,7 +784,7 @@ func handleSave(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("Failed to save: " + err.Error()), nil
 		}
 
-		msg := fmt.Sprintf("Memory saved: %q (%s)", title, typ)
+		msg := fmt.Sprintf("**Saving:** %s\n\nMemory saved (%s)", title, typ)
 		if topicKey == "" && suggestedTopicKey != "" {
 			msg += fmt.Sprintf("\nSuggested topic_key: %s", suggestedTopicKey)
 		}
@@ -861,7 +861,7 @@ func handleUpdate(s *store.Store) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("Failed to update memory: " + err.Error()), nil
 		}
 
-		msg := fmt.Sprintf("Memory updated: #%d %q (%s, scope=%s)", obs.ID, obs.Title, obs.Type, obs.Scope)
+		msg := fmt.Sprintf("**Updating:** observation #%d\n\nMemory updated: %q (%s, scope=%s)", id, obs.Title, obs.Type, obs.Scope)
 		if contentLen > s.MaxObservationLength() {
 			msg += fmt.Sprintf("\n⚠ WARNING: Content was truncated from %d to %d chars. Consider splitting into smaller observations.", contentLen, s.MaxObservationLength())
 		}
@@ -938,7 +938,7 @@ func handleContext(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		}
 
 		if context == "" {
-			return mcp.NewToolResultText("No previous session memories found."), nil
+			return mcp.NewToolResultText("**Loading context:** recent observations\n\nNo previous session memories found."), nil
 		}
 
 		stats, _ := s.Stats()
@@ -949,7 +949,7 @@ func handleContext(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 			projects = "none"
 		}
 
-		result := fmt.Sprintf("%s\n---\nMemory stats: %d sessions, %d observations across projects: %s",
+		result := fmt.Sprintf("**Loading context:** recent observations\n\n%s\n---\nMemory stats: %d sessions, %d observations across projects: %s",
 			context, stats.TotalSessions, stats.TotalObservations, projects)
 
 		return mcp.NewToolResultText(result), nil
@@ -1057,7 +1057,8 @@ func handleGetObservation(s *store.Store) server.ToolHandlerFunc {
 		duplicateMeta := fmt.Sprintf("\nDuplicates: %d", obs.DuplicateCount)
 		revisionMeta := fmt.Sprintf("\nRevisions: %d", obs.RevisionCount)
 
-		result := fmt.Sprintf("#%d [%s] %s\n%s\nSession: %s%s%s\nCreated: %s",
+		result := fmt.Sprintf("**Retrieving:** observation #%d\n\n#%d [%s] %s\n%s\nSession: %s%s%s\nCreated: %s",
+			id,
 			obs.ID, obs.Type, obs.Title,
 			obs.Content,
 			obs.SessionID, project+scope+topic, toolName+duplicateMeta+revisionMeta,
