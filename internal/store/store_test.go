@@ -1029,7 +1029,7 @@ func TestSessionObservationsAddPromptImportAndSyncChunks(t *testing.T) {
 		t.Fatalf("add observation: %v", err)
 	}
 
-	longPrompt := strings.Repeat("x", s.cfg.MaxObservationLength+25)
+// 	longPrompt := strings.Repeat("x", s.cfg.MaxObservationLength+25)
 	promptID, err := s.AddPrompt(AddPromptParams{SessionID: "test", Content: "test", Project: "engram"})
 	if err != nil {
 		t.Fatalf("add prompt: %v", err)
@@ -1548,7 +1548,7 @@ func TestStoreAdditionalQueryAndMutationBranches(t *testing.T) {
 
 	newProject := ""
 	newTopic := ""
-	updated, err := s.UpdateObservation(obsID, UpdateObservationParams{Project: &newProject, TopicKey: &newTopic})
+	updated, err := s.UpdateObservation(obsID, UpdateObservationParams{Workspace: &newProject, TopicKey: &newTopic})
 	if err != nil {
 		t.Fatalf("update observation: %v", err)
 	}
@@ -1842,7 +1842,7 @@ func TestExportImportEdgeBranches(t *testing.T) {
 				ID:        1,
 				SessionID: "missing-session",
 				Content:   "prompt",
-				Workspace: "engram",
+				Project: "engram",
 				CreatedAt: Now(),
 			}},
 		})
@@ -3523,7 +3523,7 @@ func TestListPendingSyncMutationsIncludesProject(t *testing.T) {
 	// Phase 3: Verify the Project field is populated at enqueue time.
 	foundProject := false
 	for _, m := range mutations {
-		if m.Workspace == "my-project" {
+		if m.Project == "my-project" {
 			foundProject = true
 			break
 		}
@@ -3536,7 +3536,7 @@ func TestListPendingSyncMutationsIncludesProject(t *testing.T) {
 // ─── Phase 3: extractProjectFromPayload ──────────────────────────────────────
 
 func TestExtractProjectFromSessionPayload(t *testing.T) {
-	p := syncSessionPayload{ID: "s1", Workspace: "acme"}
+	p := syncSessionPayload{Project: "acme"}
 	got := extractProjectFromPayload(p)
 	if got != "acme" {
 		t.Fatalf("expected 'acme', got %q", got)
@@ -3562,7 +3562,7 @@ func TestExtractProjectFromObservationPayloadNil(t *testing.T) {
 
 func TestExtractProjectFromPromptPayload(t *testing.T) {
 	proj := "prompt-project"
-	p := syncPromptPayload{SyncID: "p1", Workspace: &proj}
+	p := syncPromptPayload{Project: &proj}
 	got := extractProjectFromPayload(p)
 	if got != "prompt-project" {
 		t.Fatalf("expected 'prompt-project', got %q", got)
@@ -3570,7 +3570,7 @@ func TestExtractProjectFromPromptPayload(t *testing.T) {
 }
 
 func TestExtractProjectFromPromptPayloadNil(t *testing.T) {
-	p := syncPromptPayload{SyncID: "p1", Workspace: nil}
+	p := syncPromptPayload{Project: nil}
 	got := extractProjectFromPayload(p)
 	if got != "" {
 		t.Fatalf("expected empty string, got %q", got)
@@ -3662,7 +3662,7 @@ func TestEnqueueSyncMutationPopulatesProjectFromPromptPayload(t *testing.T) {
 	_, err := s.AddPrompt(AddPromptParams{
 		SessionID: "prompt-enq",
 		Content:   "What did we do?",
-		Workspace: "prompt-proj",
+		Project: "prompt-proj",
 	})
 	if err != nil {
 		t.Fatalf("add prompt: %v", err)
@@ -3705,14 +3705,14 @@ func TestListPendingFiltersNonEnrolledProjects(t *testing.T) {
 
 	// Only enrolled-proj mutations should appear.
 	for _, m := range mutations {
-		if m.Workspace == "other-proj" {
+		if m.Project == "other-proj" {
 			t.Fatalf("non-enrolled project 'other-proj' should not appear in pending mutations")
 		}
 	}
 
 	foundEnrolled := false
 	for _, m := range mutations {
-		if m.Workspace == "enrolled-proj" {
+		if m.Project == "enrolled-proj" {
 			foundEnrolled = true
 			break
 		}
@@ -3800,7 +3800,7 @@ func TestSkipAckPreservesEnrolledProjectMutations(t *testing.T) {
 		t.Fatalf("list pending: %v", err)
 	}
 	for _, m := range mutations {
-		if m.Workspace == "not-enrolled" {
+		if m.Project == "not-enrolled" {
 			t.Fatal("skip-acked mutation still appears as pending")
 		}
 	}
@@ -3831,8 +3831,8 @@ func TestEmptyProjectMutationsAlwaysSync(t *testing.T) {
 
 	// Verify they have project = ''.
 	for _, m := range mutations {
-		if m.Workspace != "" {
-			t.Fatalf("expected empty project, got %q", m.Workspace)
+		if m.Project != "" {
+			t.Fatalf("expected empty project, got %q", m.Project)
 		}
 	}
 }
@@ -3897,13 +3897,13 @@ func TestMixedEnrolledAndEmptyProjectMutations(t *testing.T) {
 	// Should have enrolled-mix and empty-project mutations, but NOT unenrolled-mix.
 	var hasEnrolled, hasGlobal bool
 	for _, m := range mutations {
-		if m.Workspace == "unenrolled-mix" {
+		if m.Project == "unenrolled-mix" {
 			t.Fatal("unenrolled project mutations should not appear")
 		}
-		if m.Workspace == "enrolled-mix" {
+		if m.Project == "enrolled-mix" {
 			hasEnrolled = true
 		}
-		if m.Workspace == "" {
+		if m.Project == "" {
 			hasGlobal = true
 		}
 	}
@@ -4053,7 +4053,7 @@ func TestProjectScopeEnqueuedWhenEnrolled(t *testing.T) {
 
 	hasObsMutation := false
 	for _, m := range after {
-		if m.Entity == SyncEntityObservation && m.Workspace == "work-project" {
+		if m.Entity == SyncEntityObservation && m.Project == "work-project" {
 			hasObsMutation = true
 			break
 		}
@@ -4091,7 +4091,7 @@ func TestProjectScopeNotEnqueuedWhenNotEnrolled(t *testing.T) {
 		t.Fatalf("list pending: %v", err)
 	}
 	for _, m := range pending {
-		if m.Entity == SyncEntityObservation && m.Workspace == "side-project" {
+		if m.Entity == SyncEntityObservation && m.Project == "side-project" {
 			t.Fatal("unenrolled project observation must not appear in pending sync mutations")
 		}
 	}

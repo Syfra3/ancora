@@ -106,12 +106,12 @@ func mustSeedObservation(t *testing.T, cfg store.Config, sessionID, project, typ
 	}
 
 	id, err := s.AddObservation(store.AddObservationParams{
-		SessionID: sessionID,
-		Type:      typ,
-		Title:     title,
-		Content:   content,
-		Workspace:   project,
-		Visibility:     scope,
+		SessionID:  sessionID,
+		Type:       typ,
+		Title:      title,
+		Content:    content,
+		Workspace:  project,
+		Visibility: scope,
 	})
 	if err != nil {
 		t.Fatalf("AddObservation: %v", err)
@@ -295,8 +295,19 @@ func TestCmdSaveAndSearch(t *testing.T) {
 		t.Fatalf("unexpected save output: %q", stdout)
 	}
 
-	withArgs(t, "ancora", "search", "my-content", "--type", "bugfix", "--workspace", "alpha", "--visibility", "personal", "--limit", "1")
+	// First try searching without filters to see if the record exists at all
+	withArgs(t, "ancora", "search", "my-content")
 	searchOut, searchErr := captureOutput(t, func() { cmdSearch(cfg) })
+	if searchErr != "" {
+		t.Fatalf("expected no stderr from search, got: %q", searchErr)
+	}
+	if !strings.Contains(searchOut, "Found 1 memories") && !strings.Contains(searchOut, "my-title") {
+		t.Logf("Search without filters: %q", searchOut)
+	}
+
+	// Now try with filters
+	withArgs(t, "ancora", "search", "my-content", "--type", "bugfix", "--workspace", "alpha", "--visibility", "personal", "--limit", "1")
+	searchOut, searchErr = captureOutput(t, func() { cmdSearch(cfg) })
 	if searchErr != "" {
 		t.Fatalf("expected no stderr from search, got: %q", searchErr)
 	}
