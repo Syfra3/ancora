@@ -140,7 +140,7 @@ func TestScopeFiltersSearchAndContext(t *testing.T) {
 		t.Fatalf("add personal observation: %v", err)
 	}
 
-	projectResults, err := s.Search("regex", SearchOptions{Project: "engram", Visibility: "project", Limit: 10})
+	projectResults, err := s.Search("regex", SearchOptions{Workspace: "engram", Visibility: "project", Limit: 10})
 	if err != nil {
 		t.Fatalf("search project scope: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestScopeFiltersSearchAndContext(t *testing.T) {
 		t.Fatalf("expected no project-scope regex results, got %d", len(projectResults))
 	}
 
-	personalResults, err := s.Search("regex", SearchOptions{Project: "engram", Visibility: "personal", Limit: 10})
+	personalResults, err := s.Search("regex", SearchOptions{Workspace: "engram", Visibility: "personal", Limit: 10})
 	if err != nil {
 		t.Fatalf("search personal scope: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestUpdateAndSoftDeleteExcludedFromSearchAndTimeline(t *testing.T) {
 		t.Fatalf("expected deleted observation to be hidden from GetObservation")
 	}
 
-	searchResults, err := s.Search("deleted", SearchOptions{Project: "engram", Limit: 10})
+	searchResults, err := s.Search("deleted", SearchOptions{Workspace: "engram", Limit: 10})
 	if err != nil {
 		t.Fatalf("search after delete: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestNewMigratesLegacyObservationIDSchema(t *testing.T) {
 		seen[o.ID] = true
 	}
 
-	results, err := s.Search("legacy", SearchOptions{Project: "engram", Limit: 10})
+	results, err := s.Search("legacy", SearchOptions{Workspace: "engram", Limit: 10})
 	if err != nil {
 		t.Fatalf("search after migration: %v", err)
 	}
@@ -815,7 +815,7 @@ func TestPassiveCaptureStoresLearnings(t *testing.T) {
 	result, err := s.PassiveCapture(PassiveCaptureParams{
 		SessionID: "s1",
 		Content:   text,
-		Workspace: "engram",
+		Project: "engram",
 		Source:    "test",
 	})
 	if err != nil {
@@ -855,7 +855,7 @@ func TestPassiveCaptureEmptyContent(t *testing.T) {
 	result, err := s.PassiveCapture(PassiveCaptureParams{
 		SessionID: "s1",
 		Content:   "",
-		Workspace: "engram",
+		Project: "engram",
 		Source:    "test",
 	})
 	if err != nil {
@@ -895,7 +895,7 @@ func TestPassiveCaptureDedupesAgainstExistingObservations(t *testing.T) {
 	result, err := s.PassiveCapture(PassiveCaptureParams{
 		SessionID: "s1",
 		Content:   text,
-		Workspace: "engram",
+		Project: "engram",
 		Source:    "test",
 	})
 	if err != nil {
@@ -922,7 +922,7 @@ func TestPassiveCaptureReturnsErrorWhenSessionDoesNotExist(t *testing.T) {
 	_, err := s.PassiveCapture(PassiveCaptureParams{
 		SessionID: "missing-session",
 		Content:   text,
-		Workspace: "engram",
+		Project: "engram",
 		Source:    "test",
 	})
 	if err == nil {
@@ -1119,7 +1119,7 @@ func TestStoreLocalSyncFoundationEnqueuesCoreMutations(t *testing.T) {
 	promptID, err := s.AddPrompt(AddPromptParams{
 		SessionID: "sync-session",
 		Content:   "How do we keep this local-first?",
-		Workspace: "engram",
+		Project: "engram",
 	})
 	if err != nil {
 		t.Fatalf("add prompt: %v", err)
@@ -4142,7 +4142,7 @@ func TestMigrateProject(t *testing.T) {
 	}
 
 	// Verify FTS search finds it under new project
-	results, _ := s.Search("test obs", SearchOptions{Project: new_, Limit: 10})
+	results, _ := s.Search("test obs", SearchOptions{Workspace: new_, Limit: 10})
 	if len(results) != 1 {
 		t.Fatalf("expected FTS to find 1 result under new project, got %d", len(results))
 	}
