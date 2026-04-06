@@ -4,7 +4,7 @@
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-Instead, email: security@syfra.dev
+Instead, email: security@syfra.co
 
 Include:
 - Description of the vulnerability

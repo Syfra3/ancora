@@ -2,7 +2,7 @@
 # Ancora — Post-compaction hook for Claude Code
 #
 # When compaction happens, inject Memory Protocol + context and instruct
-# the agent to persist the compacted summary via mem_session_summary.
+# the agent to persist the compacted summary via ancora_summarize.
 
 ANCORA_PORT="${ANCORA_PORT:-7437}"
 ANCORA_URL="http://127.0.0.1:${ANCORA_PORT}"
@@ -38,12 +38,12 @@ cat <<'PROTOCOL'
 You have ancora memory tools. This protocol is MANDATORY and ALWAYS ACTIVE.
 
 ### CORE TOOLS — always available, no ToolSearch needed
-mem_save, mem_search, mem_context, mem_session_summary, mem_get_observation, mem_save_prompt
+ancora_save, ancora_search, ancora_context, ancora_summarize, ancora_get, ancora_save_prompt
 
-Use ToolSearch for other tools: mem_update, mem_suggest_topic_key, mem_session_start, mem_session_end, mem_stats, mem_delete, mem_timeline, mem_capture_passive
+Use ToolSearch for other tools: ancora_update, ancora_suggest_topic, ancora_start, ancora_end, ancora_stats, ancora_delete, ancora_timeline, ancora_capture
 
 ### PROACTIVE SAVE — do NOT wait for user to ask
-Call `mem_save` IMMEDIATELY after ANY of these:
+Call `ancora_save` IMMEDIATELY after ANY of these:
 - Decision made (architecture, convention, workflow, tool choice)
 - Bug fixed (include root cause)
 - Convention or workflow documented/updated
@@ -53,7 +53,7 @@ Call `mem_save` IMMEDIATELY after ANY of these:
 - User preference or constraint learned
 - Feature implemented with non-obvious approach
 
-**Self-check after EVERY task**: "Did I just make a decision, fix a bug, learn something, or establish a convention? If yes → mem_save NOW."
+**Self-check after EVERY task**: "Did I just make a decision, fix a bug, learn something, or establish a convention? If yes → ancora_save NOW."
 
 ### SEARCH MEMORY when:
 - User asks to recall anything ("remember", "what did we do", "acordate", "qué hicimos")
@@ -61,19 +61,19 @@ Call `mem_save` IMMEDIATELY after ANY of these:
 - User mentions a topic you have no context on
 
 ### SESSION CLOSE — before saying "done"/"listo":
-Call `mem_session_summary` with: Goal, Discoveries, Accomplished, Next Steps, Relevant Files.
+Call `ancora_summarize` with: Goal, Discoveries, Accomplished, Next Steps, Relevant Files.
 
 ---
 
 CRITICAL INSTRUCTION POST-COMPACTION — follow these steps IN ORDER:
-PROTOCOL
+PROTOC
 
-printf "\n1. FIRST: Call mem_session_summary with the content of the compacted summary above. Use project: '%s'.\n" "$PROJECT"
+printf "\n1. FIRST: Call ancora_summarize with the content of the compacted summary above. Use project: '%s'.\n" "$PROJECT"
 printf "   This preserves what was accomplished before compaction.\n\n"
-printf "2. THEN: Call mem_context with project: '%s' to recover recent session history and observations.\n" "$PROJECT"
+printf "2. THEN: Call ancora_context with project: '%s' to recover recent session history and observations.\n" "$PROJECT"
 printf "   Read the returned context carefully — it tells you what was being worked on.\n\n"
 cat <<'PROTOCOL'
-3. If you need more detail on a specific topic, call mem_search with relevant keywords.
+3. If you need more detail on a specific topic, call ancora_search with relevant keywords.
 
 4. Only THEN continue working on what the user asked.
 

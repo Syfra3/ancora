@@ -24,23 +24,23 @@ const ANCORA_BIN = process.env.ANCORA_BIN ?? "ancora"
 
 // Ancora's own MCP tools — don't count these as "tool calls" for session stats
 const ANCORA_TOOLS = new Set([
-  "mem_search",
-  "mem_save",
-  "mem_update",
-  "mem_delete",
-  "mem_suggest_topic_key",
-  "mem_save_prompt",
-  "mem_session_summary",
-  "mem_context",
-  "mem_stats",
-  "mem_timeline",
-  "mem_get_observation",
-  "mem_session_start",
-  "mem_session_end",
+  "ancora_search",
+  "ancora_save",
+  "ancora_update",
+  "ancora_delete",
+  "ancora_suggest_topic",
+  "ancora_save_prompt",
+  "ancora_summarize",
+  "ancora_context",
+  "ancora_stats",
+  "ancora_timeline",
+  "ancora_get",
+  "ancora_start",
+  "ancora_end",
 ])
 
 // ─── Memory Instructions ─────────────────────────────────────────────────────
-// These get injected into the agent's context so it knows to call mem_save.
+// These get injected into the agent's context so it knows to call ancora_save.
 
 const MEMORY_INSTRUCTIONS = `## Ancora Persistent Memory — Protocol
 
@@ -48,7 +48,7 @@ You have access to Ancora, a persistent memory system that survives across sessi
 
 ### WHEN TO SAVE (mandatory — not optional)
 
-Call \`mem_save\` IMMEDIATELY after any of these:
+Call \`ancora_save\` IMMEDIATELY after any of these:
 - Bug fix completed
 - Architecture or design decision made
 - Non-obvious discovery about the codebase
@@ -56,7 +56,7 @@ Call \`mem_save\` IMMEDIATELY after any of these:
 - Pattern established (naming, structure, convention)
 - User preference or constraint learned
 
-Format for \`mem_save\`:
+Format for \`ancora_save\`:
 - **title**: Verb + what — short, searchable (e.g. "Fixed N+1 query in UserList", "Chose Zustand over Redux")
 - **type**: bugfix | decision | architecture | discovery | pattern | config | preference
 - **scope**: \`project\` (default) | \`personal\`
@@ -70,26 +70,26 @@ Format for \`mem_save\`:
 Topic rules:
 - Different topics must not overwrite each other (e.g. architecture vs bugfix)
 - Reuse the same \`topic_key\` to update an evolving topic instead of creating new observations
-- If unsure about the key, call \`mem_suggest_topic_key\` first and then reuse it
-- Use \`mem_update\` when you have an exact observation ID to correct
+- If unsure about the key, call \`ancora_suggest_topic\` first and then reuse it
+- Use \`ancora_update\` when you have an exact observation ID to correct
 
 ### WHEN TO SEARCH MEMORY
 
 When the user asks to recall something — any variation of "remember", "recall", "what did we do",
 "how did we solve", "recordar", "acordate", "qué hicimos", or references to past work:
-1. First call \`mem_context\` — checks recent session history (fast, cheap)
-2. If not found, call \`mem_search\` with relevant keywords (FTS5 full-text search)
-3. If you find a match, use \`mem_get_observation\` for full untruncated content
+1. First call \`ancora_context\` — checks recent session history (fast, cheap)
+2. If not found, call \`ancora_search\` with relevant keywords (FTS5 full-text search)
+3. If you find a match, use \`ancora_get\` for full untruncated content
 
 Also search memory PROACTIVELY when:
 - Starting work on something that might have been done before
 - The user mentions a topic you have no context on — check if past sessions covered it
-- The user's FIRST message references the project, a feature, or a problem — call \`mem_search\` with keywords from their message to check for prior work before responding
+- The user's FIRST message references the project, a feature, or a problem — call \`ancora_search\` with keywords from their message to check for prior work before responding
 
 ### SESSION CLOSE PROTOCOL (mandatory)
 
 Before ending a session or saying "done" / "listo" / "that's it", you MUST:
-1. Call \`mem_session_summary\` with this structure:
+1. Call \`ancora_summarize\` with this structure:
 
 ## Goal
 [What we were working on this session]
@@ -114,8 +114,8 @@ This is NOT optional. If you skip this, the next session starts blind.
 ### AFTER COMPACTION
 
 If you see a message about compaction or context reset, or if you see "FIRST ACTION REQUIRED" in your context:
-1. IMMEDIATELY call \`mem_session_summary\` with the compacted summary content — this persists what was accomplished before compaction
-2. Then call \`mem_context\` to recover any additional context from previous sessions
+1. IMMEDIATELY call \`ancora_summarize\` with the compacted summary content — this persists what was accomplished before compaction
+2. Then call \`ancora_context\` to recover any additional context from previous sessions
 3. Only THEN continue working
 
 Do not skip step 1. Without it, everything done before compaction is lost from memory.
@@ -438,7 +438,7 @@ export const Ancora: Plugin = async (ctx) => {
         `CRITICAL INSTRUCTION FOR COMPACTED SUMMARY:\n` +
         `The agent has access to Ancora persistent memory via MCP tools.\n` +
         `You MUST include the following instruction at the TOP of the compacted summary:\n\n` +
-        `"FIRST ACTION REQUIRED: Call mem_session_summary with the content of this compacted summary. ` +
+        `"FIRST ACTION REQUIRED: Call ancora_summarize with the content of this compacted summary. ` +
         `Use project: '${project}'. This preserves what was accomplished before compaction. Do this BEFORE any other work."\n\n` +
         `This is NOT optional. Without this, everything done before compaction is lost from memory.`
       )

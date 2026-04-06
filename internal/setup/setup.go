@@ -73,17 +73,17 @@ const claudeCodeMarketplace = "syfra-io/ancora"
 // in Claude Code. Adding these to ~/.claude/settings.json permissions.allow
 // prevents Claude Code from prompting for confirmation on every tool call.
 var claudeCodeMCPTools = []string{
-	"mcp__plugin_ancora_ancora__mem_capture_passive",
-	"mcp__plugin_ancora_ancora__mem_context",
-	"mcp__plugin_ancora_ancora__mem_get_observation",
-	"mcp__plugin_ancora_ancora__mem_save",
-	"mcp__plugin_ancora_ancora__mem_save_prompt",
-	"mcp__plugin_ancora_ancora__mem_search",
-	"mcp__plugin_ancora_ancora__mem_session_end",
-	"mcp__plugin_ancora_ancora__mem_session_start",
-	"mcp__plugin_ancora_ancora__mem_session_summary",
-	"mcp__plugin_ancora_ancora__mem_suggest_topic_key",
-	"mcp__plugin_ancora_ancora__mem_update",
+	"mcp__plugin_ancora_ancora__ancora_capture",
+	"mcp__plugin_ancora_ancora__ancora_context",
+	"mcp__plugin_ancora_ancora__ancora_get",
+	"mcp__plugin_ancora_ancora__ancora_save",
+	"mcp__plugin_ancora_ancora__ancora_save_prompt",
+	"mcp__plugin_ancora_ancora__ancora_search",
+	"mcp__plugin_ancora_ancora__ancora_end",
+	"mcp__plugin_ancora_ancora__ancora_start",
+	"mcp__plugin_ancora_ancora__ancora_summarize",
+	"mcp__plugin_ancora_ancora__ancora_suggest_topic",
+	"mcp__plugin_ancora_ancora__ancora_update",
 }
 
 // codexAncorBlock is the canonical Codex TOML MCP block.
@@ -107,7 +107,7 @@ You have access to Ancora, a persistent memory system that survives across sessi
 
 ### WHEN TO SAVE (mandatory — not optional)
 
-Call mem_save IMMEDIATELY after any of these:
+Call ancora_save IMMEDIATELY after any of these:
 - Bug fix completed
 - Architecture or design decision made
 - Non-obvious discovery about the codebase
@@ -115,7 +115,7 @@ Call mem_save IMMEDIATELY after any of these:
 - Pattern established (naming, structure, convention)
 - User preference or constraint learned
 
-Format for mem_save:
+Format for ancora_save:
 - **title**: Verb + what — short, searchable (e.g. "Fixed N+1 query in UserList", "Chose Zustand over Redux")
 - **type**: bugfix | decision | architecture | discovery | pattern | config | preference
 - **scope**: project (default) | personal
@@ -132,16 +132,16 @@ Format for mem_save:
 
 - Different topics must not overwrite each other (e.g. architecture vs bugfix)
 - Reuse the same topic_key to update an evolving topic instead of creating new observations
-- If unsure about the key, call mem_suggest_topic_key first and then reuse it
-- Use mem_update when you have an exact observation ID to correct
+- If unsure about the key, call ancora_suggest_topic first and then reuse it
+- Use ancora_update when you have an exact observation ID to correct
 
 ### WHEN TO SEARCH MEMORY
 
 When the user asks to recall something — any variation of "remember", "recall", "what did we do",
 "how did we solve", "recordar", "acordate", "qué hicimos", or references to past work:
-1. First call mem_context — checks recent session history (fast, cheap)
-2. If not found, call mem_search with relevant keywords (FTS5 full-text search)
-3. If you find a match, use mem_get_observation for full untruncated content
+1. First call ancora_context — checks recent session history (fast, cheap)
+2. If not found, call ancora_search with relevant keywords (FTS5 full-text search)
+3. If you find a match, use ancora_get for full untruncated content
 
 Also search memory PROACTIVELY when:
 - Starting work on something that might have been done before
@@ -150,7 +150,7 @@ Also search memory PROACTIVELY when:
 ### SESSION CLOSE PROTOCOL (mandatory)
 
 Before ending a session or saying "done" / "listo" / "that's it", you MUST:
-1. Call mem_session_summary with this structure:
+1. Call ancora_summarize with this structure:
 
 ## Goal
 [What we were working on this session]
@@ -183,14 +183,14 @@ Example:
 1. bcrypt cost=12 is the right balance for our server performance
 2. JWT refresh tokens need atomic rotation to prevent race conditions
 
-You can also call mem_capture_passive(content) directly with any text that contains a learning section.
-This is a safety net — it captures knowledge even if you forget to call mem_save explicitly.
+You can also call ancora_capture(content) directly with any text that contains a learning section.
+This is a safety net — it captures knowledge even if you forget to call ancora_save explicitly.
 
 ### AFTER COMPACTION
 
 If you see a message about compaction or context reset, or if you see "FIRST ACTION REQUIRED" in your context:
-1. IMMEDIATELY call mem_session_summary with the compacted summary content — this persists what was done before compaction
-2. Then call mem_context to recover any additional context from previous sessions
+1. IMMEDIATELY call ancora_summarize with the compacted summary content — this persists what was done before compaction
+2. Then call ancora_context to recover any additional context from previous sessions
 3. Only THEN continue working
 
 Do not skip step 1. Without it, everything done before compaction is lost from memory.
@@ -200,7 +200,7 @@ const codexCompactPromptMarkdown = `You are compacting a coding session that use
 
 You MUST prepend this exact sentence at the top of the compacted summary:
 
-FIRST ACTION REQUIRED: Call mem_session_summary with the content of this compacted summary before doing anything else, then call mem_context.
+FIRST ACTION REQUIRED: Call ancora_summarize with the content of this compacted summary before doing anything else, then call ancora_context.
 
 After that sentence, summarize:
 - Goal
