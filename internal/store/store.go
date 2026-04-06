@@ -555,6 +555,10 @@ func (s *Store) migrate() error {
 		{name: "last_seen_at", definition: "TEXT"},
 		{name: "updated_at", definition: "TEXT NOT NULL DEFAULT ''"},
 		{name: "deleted_at", definition: "TEXT"},
+		// New schema fields (PR1) - added alongside old fields for backward compatibility
+		{name: "workspace", definition: "TEXT"},
+		{name: "visibility", definition: "TEXT NOT NULL DEFAULT 'work'"},
+		{name: "organization", definition: "TEXT"},
 	}
 	for _, c := range observationColumns {
 		if err := s.addColumnIfNotExists("observations", c.name, c.definition); err != nil {
@@ -579,6 +583,13 @@ func (s *Store) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_prompts_sync_id ON user_prompts(sync_id);
 		CREATE INDEX IF NOT EXISTS idx_sync_mutations_target_seq ON sync_mutations(target_key, seq);
 		CREATE INDEX IF NOT EXISTS idx_sync_mutations_pending ON sync_mutations(target_key, acked_at, seq);
+		
+		-- PR1: Indexes for new schema fields
+		CREATE INDEX IF NOT EXISTS idx_obs_workspace ON observations(workspace);
+		CREATE INDEX IF NOT EXISTS idx_obs_visibility ON observations(visibility);
+		CREATE INDEX IF NOT EXISTS idx_obs_organization ON observations(organization);
+		CREATE INDEX IF NOT EXISTS idx_obs_topic_new ON observations(topic_key, workspace, visibility, updated_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_obs_dedupe_new ON observations(normalized_hash, workspace, visibility, type, title, created_at DESC);
 	`); err != nil {
 		return err
 	}
@@ -637,6 +648,11 @@ func (s *Store) migrate() error {
 		return err
 	}
 	if _, err := s.execHook(s.db, `INSERT OR IGNORE INTO sync_state (target_key, lifecycle, updated_at) VALUES ('cloud', 'idle', datetime('now'))`); err != nil {
+		return err
+	}
+
+	// Backfill new schema fields from old fields (PR1: Schema migration)
+	if err := s.migrateToNewSchema(); err != nil {
 		return err
 	}
 
@@ -3309,6 +3325,9 @@ func (s *Store) migrateLegacyObservationsTable() error {
 			created_at TEXT    NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT    NOT NULL DEFAULT (datetime('now')),
 			deleted_at TEXT,
+			workspace TEXT,
+			visibility TEXT NOT NULL DEFAULT 'work',
+			organization TEXT,
 			FOREIGN KEY (session_id) REFERENCES sessions(id)
 		);
 	`); err != nil {
@@ -3319,7 +3338,8 @@ func (s *Store) migrateLegacyObservationsTable() error {
 		INSERT INTO observations_migrated (
 			id, sync_id, session_id, type, title, content, tool_name, project,
 			scope, topic_key, normalized_hash, revision_count, duplicate_count,
-			last_seen_at, created_at, updated_at, deleted_at
+			last_seen_at, created_at, updated_at, deleted_at,
+			workspace, visibility, organization
 		)
 		SELECT
 			CASE
@@ -3342,7 +3362,16 @@ func (s *Store) migrateLegacyObservationsTable() error {
 			last_seen_at,
 			COALESCE(NULLIF(created_at, ''), datetime('now')),
 			COALESCE(NULLIF(updated_at, ''), NULLIF(created_at, ''), datetime('now')),
-			deleted_at
+			deleted_at,
+			-- PR1: Backfill new schema fields during legacy migration
+			project,  -- workspace = project
+			CASE WHEN scope = 'personal' THEN 'personal' ELSE 'work' END,  -- visibility
+			CASE
+				WHEN scope = 'personal' THEN NULL
+				WHEN project LIKE 'glim-%' THEN 'glim'
+				WHEN project IN ('syfra', 'ancora', 'opencode') THEN 'syfra'
+				ELSE 'personal-projects'
+			END  -- organization
 		FROM observations
 		ORDER BY rowid;
 	`); err != nil {
@@ -3382,6 +3411,51 @@ func (s *Store) migrateLegacyObservationsTable() error {
 
 	if err := s.commitHook(tx); err != nil {
 		return fmt.Errorf("migrate legacy observations: commit: %w", err)
+	}
+
+	return nil
+}
+
+// migrateToNewSchema backfills workspace, visibility, and organization from project and scope.
+// This is PR1 of the schema refactor - adds new columns alongside old ones for backward compatibility.
+func (s *Store) migrateToNewSchema() error {
+	// Check if migration already ran (workspace column populated)
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE workspace IS NOT NULL`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration status: %w", err)
+	}
+
+	var total int
+	err = s.db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&total)
+	if err != nil {
+		return fmt.Errorf("count observations: %w", err)
+	}
+
+	// If all rows already migrated, skip
+	if count == total && total > 0 {
+		return nil
+	}
+
+	// Backfill new fields from old fields
+	_, err = s.execHook(s.db, `
+		UPDATE observations
+		SET
+			workspace = project,
+			visibility = CASE 
+				WHEN scope = 'personal' THEN 'personal'
+				ELSE 'work'
+			END,
+			organization = CASE
+				WHEN scope = 'personal' THEN NULL
+				WHEN project LIKE 'glim-%' THEN 'glim'
+				WHEN project IN ('syfra', 'ancora', 'opencode') THEN 'syfra'
+				ELSE 'personal-projects'
+			END
+		WHERE workspace IS NULL
+	`)
+	if err != nil {
+		return fmt.Errorf("backfill new schema fields: %w", err)
 	}
 
 	return nil

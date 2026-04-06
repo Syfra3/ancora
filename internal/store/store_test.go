@@ -4702,3 +4702,217 @@ func TestSetEmbeddingAndSearchSemantic(t *testing.T) {
 		t.Errorf("expected id2 (%d), got id=%d", id2, results[0].ID)
 	}
 }
+
+// TestMigrateToNewSchema tests the backfill of workspace, visibility, and organization fields.
+// PR1: Schema refactor - tests migration from project/scope to workspace/visibility/organization.
+func TestMigrateToNewSchema(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "ancora.db")
+
+	// Create legacy database with old schema (project + scope)
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			project TEXT NOT NULL,
+			directory TEXT NOT NULL,
+			started_at TEXT NOT NULL DEFAULT (datetime('now')),
+			ended_at TEXT,
+			summary TEXT
+		);
+		CREATE TABLE observations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			sync_id TEXT,
+			session_id TEXT NOT NULL,
+			type TEXT NOT NULL,
+			title TEXT NOT NULL,
+			content TEXT NOT NULL,
+			tool_name TEXT,
+			project TEXT,
+			scope TEXT NOT NULL DEFAULT 'project',
+			topic_key TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (session_id) REFERENCES sessions(id)
+		);
+		
+		INSERT INTO sessions (id, project, directory) VALUES ('s1', 'test', '/tmp/test');
+		
+		-- Insert test observations with different project/scope combinations
+		INSERT INTO observations (sync_id, session_id, type, title, content, project, scope)
+		VALUES
+			-- glim-* should map to organization=glim
+			('obs-1', 's1', 'bugfix', 'Fix glim bug', 'content', 'glim-api', 'project'),
+			-- syfra/ancora/opencode should map to organization=syfra
+			('obs-2', 's1', 'decision', 'Syfra change', 'content', 'syfra', 'project'),
+			('obs-3', 's1', 'architecture', 'Ancora improvement', 'content', 'ancora', 'project'),
+			-- personal scope should map to visibility=personal, organization=NULL
+			('obs-4', 's1', 'manual', 'My goals', 'content', 'life', 'personal'),
+			-- other projects should map to organization=personal-projects
+			('obs-5', 's1', 'learning', 'Learn Rust', 'content', 'learning', 'project');
+	`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("seed legacy db: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	// Open with new store (should run migration)
+	cfg := mustDefaultConfig(t)
+	cfg.DataDir = dataDir
+
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new store after legacy schema: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	// Query the observations and verify migration
+	type result struct {
+		Title        string
+		Project      *string
+		Scope        string
+		Workspace    *string
+		Visibility   string
+		Organization *string
+	}
+
+	rows, err := s.db.Query(`
+		SELECT title, project, scope, workspace, visibility, organization
+		FROM observations
+		ORDER BY id
+	`)
+	if err != nil {
+		t.Fatalf("query observations: %v", err)
+	}
+	defer rows.Close()
+
+	var results []result
+	for rows.Next() {
+		var r result
+		if err := rows.Scan(&r.Title, &r.Project, &r.Scope, &r.Workspace, &r.Visibility, &r.Organization); err != nil {
+			t.Fatalf("scan row: %v", err)
+		}
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows error: %v", err)
+	}
+
+	if len(results) != 5 {
+		t.Fatalf("expected 5 observations, got %d", len(results))
+	}
+
+	// Test case 1: glim-api -> organization=glim, visibility=work
+	if results[0].Workspace == nil || *results[0].Workspace != "glim-api" {
+		t.Errorf("obs 1: expected workspace=glim-api, got %v", results[0].Workspace)
+	}
+	if results[0].Visibility != "work" {
+		t.Errorf("obs 1: expected visibility=work, got %s", results[0].Visibility)
+	}
+	if results[0].Organization == nil || *results[0].Organization != "glim" {
+		t.Errorf("obs 1: expected organization=glim, got %v", results[0].Organization)
+	}
+
+	// Test case 2: syfra -> organization=syfra, visibility=work
+	if results[1].Workspace == nil || *results[1].Workspace != "syfra" {
+		t.Errorf("obs 2: expected workspace=syfra, got %v", results[1].Workspace)
+	}
+	if results[1].Visibility != "work" {
+		t.Errorf("obs 2: expected visibility=work, got %s", results[1].Visibility)
+	}
+	if results[1].Organization == nil || *results[1].Organization != "syfra" {
+		t.Errorf("obs 2: expected organization=syfra, got %v", results[1].Organization)
+	}
+
+	// Test case 3: ancora -> organization=syfra, visibility=work
+	if results[2].Workspace == nil || *results[2].Workspace != "ancora" {
+		t.Errorf("obs 3: expected workspace=ancora, got %v", results[2].Workspace)
+	}
+	if results[2].Visibility != "work" {
+		t.Errorf("obs 3: expected visibility=work, got %s", results[2].Visibility)
+	}
+	if results[2].Organization == nil || *results[2].Organization != "syfra" {
+		t.Errorf("obs 3: expected organization=syfra, got %v", results[2].Organization)
+	}
+
+	// Test case 4: personal scope -> visibility=personal, organization=NULL
+	if results[3].Workspace == nil || *results[3].Workspace != "life" {
+		t.Errorf("obs 4: expected workspace=life, got %v", results[3].Workspace)
+	}
+	if results[3].Visibility != "personal" {
+		t.Errorf("obs 4: expected visibility=personal, got %s", results[3].Visibility)
+	}
+	if results[3].Organization != nil {
+		t.Errorf("obs 4: expected organization=NULL, got %v", results[3].Organization)
+	}
+
+	// Test case 5: other project -> organization=personal-projects, visibility=work
+	if results[4].Workspace == nil || *results[4].Workspace != "learning" {
+		t.Errorf("obs 5: expected workspace=learning, got %v", results[4].Workspace)
+	}
+	if results[4].Visibility != "work" {
+		t.Errorf("obs 5: expected visibility=work, got %s", results[4].Visibility)
+	}
+	if results[4].Organization == nil || *results[4].Organization != "personal-projects" {
+		t.Errorf("obs 5: expected organization=personal-projects, got %v", results[4].Organization)
+	}
+}
+
+// TestMigrateToNewSchemaIdempotent verifies migration is idempotent (safe to run multiple times).
+func TestMigrateToNewSchemaIdempotent(t *testing.T) {
+	cfg := mustDefaultConfig(t)
+	cfg.DataDir = t.TempDir()
+
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	// Add observation with old fields
+	_, err = s.db.Exec(`
+		INSERT INTO sessions (id, project, directory) VALUES ('s1', 'test', '/tmp/test');
+		INSERT INTO observations (sync_id, session_id, type, title, content, project, scope)
+		VALUES ('obs-1', 's1', 'bugfix', 'Test', 'content', 'glim-api', 'project');
+	`)
+	if err != nil {
+		t.Fatalf("insert test data: %v", err)
+	}
+
+	// Run migration first time
+	if err := s.migrateToNewSchema(); err != nil {
+		t.Fatalf("first migration: %v", err)
+	}
+
+	// Verify migration worked
+	var workspace, visibility, organization sql.NullString
+	err = s.db.QueryRow(`SELECT workspace, visibility, organization FROM observations WHERE sync_id = 'obs-1'`).Scan(&workspace, &visibility, &organization)
+	if err != nil {
+		t.Fatalf("query after first migration: %v", err)
+	}
+	if !workspace.Valid || workspace.String != "glim-api" {
+		t.Errorf("after first migration: expected workspace=glim-api, got %v", workspace)
+	}
+
+	// Run migration second time (should be no-op)
+	if err := s.migrateToNewSchema(); err != nil {
+		t.Fatalf("second migration: %v", err)
+	}
+
+	// Verify data unchanged
+	var workspace2, visibility2, organization2 sql.NullString
+	err = s.db.QueryRow(`SELECT workspace, visibility, organization FROM observations WHERE sync_id = 'obs-1'`).Scan(&workspace2, &visibility2, &organization2)
+	if err != nil {
+		t.Fatalf("query after second migration: %v", err)
+	}
+	if workspace2.String != workspace.String {
+		t.Errorf("migration not idempotent: workspace changed from %s to %s", workspace.String, workspace2.String)
+	}
+}
