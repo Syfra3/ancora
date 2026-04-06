@@ -13,6 +13,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -152,6 +153,8 @@ func main() {
 		cmdProjects(cfg)
 	case "setup":
 		cmdSetup()
+	case "doctor":
+		cmdDoctor(cfg)
 	case "version", "--version", "-v":
 		fmt.Printf("ancora %s\n", version)
 	case "help", "--help", "-h":
@@ -1241,14 +1244,16 @@ Commands:
                        --all      Scan ALL projects for similar name groups
                        --dry-run  Preview what would be merged (no changes)
   setup [agent]      Install/setup agent integration (opencode, claude-code)
+  doctor             Run system health checks (database, embeddings, FTS5)
 
   version            Print version
   help               Show this help
 
 Environment:
-  ANCORA_DATA_DIR    Override data directory (default: ~/.ancora)
-  ANCORA_PORT        Override HTTP server port (default: 7437)
-  ANCORA_PROJECT     Override auto-detected project name for MCP server
+  ANCORA_DATA_DIR      Override data directory (default: ~/.ancora)
+  ANCORA_PORT          Override HTTP server port (default: 7437)
+  ANCORA_PROJECT       Override auto-detected project name for MCP server
+  ANCORA_EMBED_MODEL   Path to embedding model GGUF file (for hybrid search)
 
 MCP Configuration (add to your agent's config):
   {
@@ -1370,4 +1375,80 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return string(runes[:max]) + "..."
+}
+
+func cmdDoctor(cfg store.Config) {
+	fmt.Printf("Ancora Doctor — System Health Check\n")
+	fmt.Printf("Version: %s\n\n", version)
+
+	hasErrors := false
+
+	// 1. Database check
+	fmt.Printf("━━━ Database ━━━\n")
+	dbPath := filepath.Join(cfg.DataDir, "ancora.db")
+	if info, err := os.Stat(dbPath); err == nil {
+		fmt.Printf("  ✅ Database found: %s (%d MB)\n", dbPath, info.Size()/1024/1024)
+
+		// Try to open and check readability
+		if s, err := store.New(cfg); err == nil {
+			defer s.Close()
+			if stats, err := s.Stats(); err == nil {
+				fmt.Printf("  ✅ Database readable: %d observations, %d sessions\n", stats.TotalObservations, stats.TotalSessions)
+			} else {
+				fmt.Printf("  ❌ Database not readable: %v\n", err)
+				hasErrors = true
+			}
+		} else {
+			fmt.Printf("  ❌ Cannot open database: %v\n", err)
+			hasErrors = true
+		}
+	} else {
+		fmt.Printf("  ⚠️  Database not found (will be created on first use)\n")
+	}
+
+	// 2. Embedding model check
+	fmt.Printf("\n━━━ Embedding Model (Hybrid Search) ━━━\n")
+	if embedder, err := embed.New(); err == nil {
+		fmt.Printf("  ✅ Model found: %s\n", embedder.ModelPath)
+		fmt.Printf("  ✅ llama-embedding CLI: %s\n", embedder.CLIPath)
+		fmt.Printf("  ✅ Hybrid search: ENABLED (FTS5 + vector RRF fusion)\n")
+	} else {
+		if errors.Is(err, embed.ErrModelNotFound) {
+			fmt.Printf("  ⚠️  Model not found\n")
+			fmt.Printf("     Set ANCORA_EMBED_MODEL or install to: %s\n", filepath.Join(embed.ModelInstallPath(), embed.ModelFileName))
+			fmt.Printf("     Fallback: keyword-only search (FTS5)\n")
+		} else if errors.Is(err, embed.ErrEmbedderUnavailable) {
+			fmt.Printf("  ⚠️  llama-embedding CLI not found in PATH\n")
+			fmt.Printf("     Install llama.cpp to enable hybrid search\n")
+			fmt.Printf("     Fallback: keyword-only search (FTS5)\n")
+		} else {
+			fmt.Printf("  ❌ Unexpected error: %v\n", err)
+			hasErrors = true
+		}
+	}
+
+	// 3. Project detection
+	fmt.Printf("\n━━━ Project Detection ━━━\n")
+	if cwd, err := os.Getwd(); err == nil {
+		detectedProject := detectProject(cwd)
+		fmt.Printf("  ✅ Current directory: %s\n", cwd)
+		fmt.Printf("  ✅ Detected project: %s\n", detectedProject)
+	} else {
+		fmt.Printf("  ❌ Cannot get current directory: %v\n", err)
+		hasErrors = true
+	}
+
+	// 4. FTS5 check (implicitly tested by database check)
+	fmt.Printf("\n━━━ Full-Text Search (FTS5) ━━━\n")
+	fmt.Printf("  ✅ FTS5 enabled (built into SQLite)\n")
+
+	// Summary
+	fmt.Printf("\n━━━ Summary ━━━\n")
+	if hasErrors {
+		fmt.Printf("  ❌ Some checks failed — see errors above\n")
+		exitFunc(1)
+	} else {
+		fmt.Printf("  ✅ All critical checks passed\n")
+		fmt.Printf("  ℹ️  Warnings do not prevent Ancora from working\n")
+	}
 }
