@@ -24,6 +24,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/Syfra3/ancora/internal/embed"
 	"github.com/Syfra3/ancora/internal/mcp"
 	"github.com/Syfra3/ancora/internal/project"
 	"github.com/Syfra3/ancora/internal/server"
@@ -237,8 +238,19 @@ func cmdMCP(cfg store.Config) {
 	}
 	defer s.Close()
 
+	// Initialize embedder for hybrid semantic search (FTS5 + vector RRF fusion).
+	// If model is unavailable, gracefully falls back to keyword-only search.
+	var embedder mcp.Embedder
+	if e, err := embed.New(); err == nil {
+		embedder = e
+		log.Printf("[ancora] hybrid search enabled (model: %s)", e.ModelPath)
+	} else {
+		log.Printf("[ancora] hybrid search unavailable, using keyword-only: %v", err)
+	}
+
 	mcpCfg := mcp.MCPConfig{
 		DefaultProject: detectedProject,
+		Embedder:       embedder,
 	}
 
 	allowlist := resolveMCPTools(toolsFilter)
