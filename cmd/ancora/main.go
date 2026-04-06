@@ -225,7 +225,7 @@ func cmdServe(cfg store.Config) {
 }
 
 func cmdMCP(cfg store.Config) {
-	// Parse --tools and --project flags
+	// Parse --tools and --project/--workspace flags
 	toolsFilter := ""
 	projectOverride := ""
 	for i := 2; i < len(os.Args); i++ {
@@ -233,6 +233,11 @@ func cmdMCP(cfg store.Config) {
 			toolsFilter = strings.TrimPrefix(os.Args[i], "--tools=")
 		} else if os.Args[i] == "--tools" && i+1 < len(os.Args) {
 			toolsFilter = os.Args[i+1]
+			i++
+		} else if strings.HasPrefix(os.Args[i], "--workspace=") {
+			projectOverride = strings.TrimPrefix(os.Args[i], "--workspace=")
+		} else if os.Args[i] == "--workspace" && i+1 < len(os.Args) {
+			projectOverride = os.Args[i+1]
 			i++
 		} else if strings.HasPrefix(os.Args[i], "--project=") {
 			projectOverride = strings.TrimPrefix(os.Args[i], "--project=")
@@ -400,15 +405,16 @@ func cmdSearch(cfg store.Config) {
 
 func cmdSave(cfg store.Config) {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: ancora save <title> <content> [--type TYPE] [--project PROJECT] [--scope SCOPE] [--topic TOPIC_KEY]")
+		fmt.Fprintln(os.Stderr, "usage: ancora save <title> <content> [--type TYPE] [--workspace WORKSPACE] [--visibility VISIBILITY] [--organization ORGANIZATION] [--topic TOPIC_KEY]")
 		exitFunc(1)
 	}
 
 	title := os.Args[2]
 	content := os.Args[3]
 	typ := "manual"
-	project := ""
-	scope := "project"
+	workspace := ""
+	visibility := "" // PR4: Empty by default, will be auto-inferred if not provided
+	organization := ""
 	topicKey := ""
 
 	for i := 4; i < len(os.Args); i++ {
@@ -418,14 +424,19 @@ func cmdSave(cfg store.Config) {
 				typ = os.Args[i+1]
 				i++
 			}
-		case "--project":
+		case "--workspace", "--project": // Accept both old and new names
 			if i+1 < len(os.Args) {
-				project = os.Args[i+1]
+				workspace = os.Args[i+1]
 				i++
 			}
-		case "--scope":
+		case "--visibility", "--scope": // Accept both old and new names
 			if i+1 < len(os.Args) {
-				scope = os.Args[i+1]
+				visibility = os.Args[i+1]
+				i++
+			}
+		case "--organization":
+			if i+1 < len(os.Args) {
+				organization = os.Args[i+1]
 				i++
 			}
 		case "--topic":
@@ -443,18 +454,19 @@ func cmdSave(cfg store.Config) {
 	defer s.Close()
 
 	sessionID := "manual-save"
-	if project != "" {
-		sessionID = "manual-save-" + project
+	if workspace != "" {
+		sessionID = "manual-save-" + workspace
 	}
-	s.CreateSession(sessionID, project, "")
+	s.CreateSession(sessionID, workspace, organization)
 	id, err := storeAddObservation(s, store.AddObservationParams{
-		SessionID:  sessionID,
-		Type:       typ,
-		Title:      title,
-		Content:    content,
-		Workspace:  project,
-		Visibility: scope,
-		TopicKey:   topicKey,
+		SessionID:    sessionID,
+		Type:         typ,
+		Title:        title,
+		Content:      content,
+		Workspace:    workspace,
+		Visibility:   visibility,
+		Organization: organization,
+		TopicKey:     topicKey,
 	})
 	if err != nil {
 		fatal(err)

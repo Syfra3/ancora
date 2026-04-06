@@ -1,6 +1,7 @@
 package search
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -180,23 +181,23 @@ func TestSearchWithOptionsHybridHonorsExplicitProjectFilter(t *testing.T) {
 	}
 
 	alphaID, err := s.AddObservation(store.AddObservationParams{
-		SessionID: "s-alpha",
-		Type:      "decision",
-		Title:     "Alpha semantic hit",
-		Content:   "shared semantic token",
-		Workspace:   "alpha",
-		Visibility:     "project",
+		SessionID:  "s-alpha",
+		Type:       "decision",
+		Title:      "Alpha semantic hit",
+		Content:    "shared semantic token",
+		Workspace:  "alpha",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add alpha observation: %v", err)
 	}
 	betaID, err := s.AddObservation(store.AddObservationParams{
-		SessionID: "s-beta",
-		Type:      "decision",
-		Title:     "Beta semantic hit",
-		Content:   "shared semantic token",
-		Workspace:   "beta",
-		Visibility:     "project",
+		SessionID:  "s-beta",
+		Type:       "decision",
+		Title:      "Beta semantic hit",
+		Content:    "shared semantic token",
+		Workspace:  "beta",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add beta observation: %v", err)
@@ -219,5 +220,339 @@ func TestSearchWithOptionsHybridHonorsExplicitProjectFilter(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].Title != "Alpha semantic hit" {
 		t.Fatalf("expected explicit project filter to keep only alpha result, got %#v", results)
+	}
+}
+
+// ─── HybridSearch Tests ──────────────────────────────────────────────────────
+
+func TestHybridSearchWithoutEmbedder(t *testing.T) {
+	s := newSearchTestStore(t)
+	if err := s.CreateSession("s-test", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if _, err := s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-test",
+		Type:       "decision",
+		Title:      "Keyword result",
+		Content:    "searchable keyword content",
+		Workspace:  "test",
+		Visibility: "project",
+	}); err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	// HybridSearch with nil queryVec should fall back to keyword-only.
+	results, mode, err := HybridSearch("searchable keyword", nil, 10, s)
+	if err != nil {
+		t.Fatalf("HybridSearch: %v", err)
+	}
+
+	if mode != ModeKeyword {
+		t.Errorf("expected ModeKeyword when queryVec is nil, got %q", mode)
+	}
+	if len(results) == 0 {
+		t.Error("expected at least one keyword result")
+	}
+}
+
+func TestHybridSearchSemanticOnly(t *testing.T) {
+	s := newSearchTestStore(t)
+	if err := s.CreateSession("s-test", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Add observation with embedding but no FTS5 match.
+	id, err := s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-test",
+		Type:       "decision",
+		Title:      "Semantic result",
+		Content:    "unique specialized terminology",
+		Workspace:  "test",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	vec := []float32{0.7, 0.3}
+	if err := s.SetEmbedding(id, vec); err != nil {
+		t.Fatalf("set embedding: %v", err)
+	}
+
+	// Search for a term that won't match FTS5 but will match semantically.
+	results, mode, err := HybridSearch("nonexistent query term", vec, 10, s)
+	if err != nil {
+		t.Fatalf("HybridSearch: %v", err)
+	}
+
+	// Should fall back to semantic-only since keyword returns nothing.
+	if mode != ModeSemantic {
+		t.Errorf("expected ModeSemantic, got %q", mode)
+	}
+	if len(results) == 0 {
+		t.Error("expected at least one semantic result")
+	}
+}
+
+func TestHybridSearchTrueHybrid(t *testing.T) {
+	s := newSearchTestStore(t)
+	if err := s.CreateSession("s-test", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Add observations with both FTS5 and semantic matches.
+	ids := []int64{}
+	observations := []store.AddObservationParams{
+		{SessionID: "s-test", Type: "decision", Title: "First", Content: "hybrid search test", Workspace: "test", Visibility: "project"},
+		{SessionID: "s-test", Type: "bugfix", Title: "Second", Content: "another hybrid result", Workspace: "test", Visibility: "project"},
+	}
+	for _, obs := range observations {
+		id, err := s.AddObservation(obs)
+		if err != nil {
+			t.Fatalf("add observation: %v", err)
+		}
+		ids = append(ids, id)
+	}
+
+	vec := []float32{0.5, 0.5}
+	for _, id := range ids {
+		if err := s.SetEmbedding(id, vec); err != nil {
+			t.Fatalf("set embedding: %v", err)
+		}
+	}
+
+	// Search with both keyword and semantic matches.
+	results, mode, err := HybridSearch("hybrid", vec, 10, s)
+	if err != nil {
+		t.Fatalf("HybridSearch: %v", err)
+	}
+
+	if mode != ModeHybrid {
+		t.Errorf("expected ModeHybrid, got %q", mode)
+	}
+	if len(results) < 2 {
+		t.Errorf("expected at least 2 hybrid results, got %d", len(results))
+	}
+}
+
+func TestHybridSearchDefaultLimit(t *testing.T) {
+	s := newSearchTestStore(t)
+	if err := s.CreateSession("s-test", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if _, err := s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-test",
+		Type:       "test",
+		Title:      "Test",
+		Content:    "test content",
+		Workspace:  "test",
+		Visibility: "project",
+	}); err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	// HybridSearch with limit <= 0 should use default limit of 10.
+	results, _, err := HybridSearch("test", nil, 0, s)
+	if err != nil {
+		t.Fatalf("HybridSearch: %v", err)
+	}
+
+	// Should not panic or error.
+	if len(results) == 0 {
+		t.Error("expected at least one result with default limit")
+	}
+}
+
+// ─── Filter Tests ────────────────────────────────────────────────────────────
+
+func TestFilterResultsByType(t *testing.T) {
+	s := newSearchTestStore(t)
+	if err := s.CreateSession("s-test", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	observations := []store.AddObservationParams{
+		{SessionID: "s-test", Type: "decision", Title: "Decision", Content: "content", Workspace: "test", Visibility: "project"},
+		{SessionID: "s-test", Type: "bugfix", Title: "Bugfix", Content: "content", Workspace: "test", Visibility: "project"},
+	}
+	for _, obs := range observations {
+		if _, err := s.AddObservation(obs); err != nil {
+			t.Fatalf("add observation: %v", err)
+		}
+	}
+
+	results, _, err := SearchWithOptions("content", store.SearchOptions{Type: "decision", Limit: 10}, nil, s)
+	if err != nil {
+		t.Fatalf("SearchWithOptions: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result filtered by type, got %d", len(results))
+	}
+	if results[0].Type != "decision" {
+		t.Errorf("expected type=decision, got %s", results[0].Type)
+	}
+}
+
+func TestFilterResultsByVisibility(t *testing.T) {
+	s := newSearchTestStore(t)
+	if err := s.CreateSession("s-test", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	observations := []store.AddObservationParams{
+		{SessionID: "s-test", Type: "test", Title: "Project obs", Content: "shared content", Workspace: "test", Visibility: "project"},
+		{SessionID: "s-test", Type: "test", Title: "Personal obs", Content: "shared content", Workspace: "test", Visibility: "personal"},
+	}
+	ids := []int64{}
+	for _, obs := range observations {
+		id, err := s.AddObservation(obs)
+		if err != nil {
+			t.Fatalf("add observation: %v", err)
+		}
+		ids = append(ids, id)
+	}
+
+	// Add embeddings for semantic search.
+	vec := []float32{0.5, 0.5}
+	for _, id := range ids {
+		if err := s.SetEmbedding(id, vec); err != nil {
+			t.Fatalf("set embedding: %v", err)
+		}
+	}
+
+	// Test visibility filter with hybrid search.
+	results, _, err := SearchWithOptions("shared", store.SearchOptions{Visibility: "project", Limit: 10}, stubEmbedder{vec: vec}, s)
+	if err != nil {
+		t.Fatalf("SearchWithOptions: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result filtered by visibility=project, got %d", len(results))
+	}
+	// Note: store.normalizeScope returns "work" for non-personal scopes.
+	if results[0].Visibility != "work" {
+		t.Errorf("expected visibility=work (normalized), got %s", results[0].Visibility)
+	}
+}
+
+func TestNormalizeScopeEdgeCases(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"personal", "personal"},
+		{"PERSONAL", "personal"},
+		{"  personal  ", "personal"},
+		{"project", "project"},
+		{"PROJECT", "project"},
+		{"anything else", "project"},
+		{"", "project"},
+		{"  ", "project"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := normalizeScope(tt.input)
+			if result != tt.expected {
+				t.Errorf("normalizeScope(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCandidateLimitEdgeCases(t *testing.T) {
+	tests := []struct {
+		input    int
+		expected int
+	}{
+		{10, 40},
+		{0, 10},
+		{-5, 10},
+		{1, 4},
+		{100, 400},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("limit_%d", tt.input), func(t *testing.T) {
+			result := candidateLimit(tt.input)
+			if result != tt.expected {
+				t.Errorf("candidateLimit(%d) = %d, want %d", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSearchWithOptionsSemanticMode(t *testing.T) {
+	s := newSearchTestStore(t)
+	if err := s.CreateSession("s-test", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Add observation with embedding.
+	id, err := s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-test",
+		Type:       "decision",
+		Title:      "Semantic only",
+		Content:    "specialized vocabulary",
+		Workspace:  "test",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	vec := []float32{0.8, 0.2}
+	if err := s.SetEmbedding(id, vec); err != nil {
+		t.Fatalf("set embedding: %v", err)
+	}
+
+	// Search with a query that won't match FTS5.
+	results, mode, err := SearchWithOptions("nonexistent", store.SearchOptions{Limit: 10}, stubEmbedder{vec: vec}, s)
+	if err != nil {
+		t.Fatalf("SearchWithOptions: %v", err)
+	}
+
+	if mode != ModeSemantic {
+		t.Errorf("expected ModeSemantic when only semantic results, got %q", mode)
+	}
+	if len(results) == 0 {
+		t.Error("expected at least one semantic result")
+	}
+}
+
+func TestSearchWithOptionsEmbedderError(t *testing.T) {
+	s := newSearchTestStore(t)
+	if err := s.CreateSession("s-test", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if _, err := s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-test",
+		Type:       "test",
+		Title:      "Test",
+		Content:    "test content",
+		Workspace:  "test",
+		Visibility: "project",
+	}); err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	// Use an embedder that returns an error.
+	errorEmbedder := stubEmbedder{err: fmt.Errorf("embedding failed")}
+
+	// Should fall back to keyword-only when embedder fails.
+	results, mode, err := SearchWithOptions("test", store.SearchOptions{Limit: 10}, errorEmbedder, s)
+	if err != nil {
+		t.Fatalf("SearchWithOptions: %v", err)
+	}
+
+	if mode != ModeKeyword {
+		t.Errorf("expected ModeKeyword when embedder fails, got %q", mode)
+	}
+	if len(results) == 0 {
+		t.Error("expected at least one keyword result")
 	}
 }

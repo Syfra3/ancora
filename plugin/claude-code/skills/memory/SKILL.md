@@ -60,9 +60,12 @@ Call `ancora_save` IMMEDIATELY and WITHOUT BEING ASKED after any of these:
 Format for `ancora_save`:
 - **title**: Verb + what — short, searchable (e.g. "Fixed N+1 query in UserList", "Chose Zustand over Redux")
 - **type**: bugfix | decision | architecture | discovery | pattern | config | preference
-- **scope**: `project` (default) | `personal`
-  - `project` — any work knowledge: coding, research, writing, business plans, side projects. Sync to Syfra Cloud is controlled by project enrollment, NOT by this scope.
-  - `personal` — private life knowledge (finance, health, goals, etc.). NEVER synced, local device only.
+- **workspace** (optional): Workspace/project/repo name (e.g. `glim-api`, `syfra`, `life`)
+- **visibility** (optional): `work` (default) | `personal`
+  - `work` — Professional knowledge: coding, research, architecture, business work. Can sync to Syfra Cloud if organization enrolled.
+  - `personal` — Private life knowledge (health, finances, goals). NEVER synced automatically, local device only.
+  - **Auto-detection**: If omitted, visibility is automatically inferred from title and content. Personal triggers include: "my goals", "my health", "my finances", "personal", "private", "family", etc.
+- **organization** (optional): Organization name for Syfra Cloud (e.g. `glim`, `syfra`, `google`). Only meaningful when `visibility=work`.
 - **topic_key** (optional but recommended for evolving topics): stable key like `architecture/auth-model`
 - **content**:
   **What**: One sentence — what was done

@@ -394,13 +394,13 @@ func TestViewObservationDetailTimelineSessionsAndSessionDetail(t *testing.T) {
 	summary := "session summary"
 	m.Height = 14
 	m.Sessions = []store.SessionSummary{
-		{ID: "s1", Workspace: "engram", StartedAt: "2026-01-01", Summary: &summary, ObservationCount: 2},
-		{ID: "s2", Workspace: "engram", StartedAt: "2026-01-02", ObservationCount: 1},
-		{ID: "s3", Workspace: "engram", StartedAt: "2026-01-03", ObservationCount: 1},
-		{ID: "s4", Workspace: "engram", StartedAt: "2026-01-04", ObservationCount: 1},
-		{ID: "s5", Workspace: "engram", StartedAt: "2026-01-05", ObservationCount: 1},
-		{ID: "s6", Workspace: "engram", StartedAt: "2026-01-06", ObservationCount: 1},
-		{ID: "s7", Workspace: "engram", StartedAt: "2026-01-07", ObservationCount: 1},
+		{ID: "s1", Project: "engram", StartedAt: "2026-01-01", Summary: &summary, ObservationCount: 2},
+		{ID: "s2", Project: "engram", StartedAt: "2026-01-02", ObservationCount: 1},
+		{ID: "s3", Project: "engram", StartedAt: "2026-01-03", ObservationCount: 1},
+		{ID: "s4", Project: "engram", StartedAt: "2026-01-04", ObservationCount: 1},
+		{ID: "s5", Project: "engram", StartedAt: "2026-01-05", ObservationCount: 1},
+		{ID: "s6", Project: "engram", StartedAt: "2026-01-06", ObservationCount: 1},
+		{ID: "s7", Project: "engram", StartedAt: "2026-01-07", ObservationCount: 1},
 	}
 	out = m.viewSessions()
 	if !strings.Contains(out, "Sessions") || !strings.Contains(out, "showing 1-5 of 7") {

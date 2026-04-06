@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -413,5 +414,754 @@ func TestHandleStatsReturnsInternalServerErrorOnLoaderError(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500 stats response, got %d", rec.Code)
+	}
+}
+
+// ─── Missing Handler Tests ───────────────────────────────────────────────────
+
+func TestHandleRecentSessions(t *testing.T) {
+	st := newServerTestStore(t)
+	srv := New(st, 0)
+	h := srv.Handler()
+
+	// Create test sessions.
+	sessions := []struct {
+		id      string
+		project string
+	}{
+		{"s-alpha-1", "alpha"},
+		{"s-alpha-2", "alpha"},
+		{"s-beta-1", "beta"},
+	}
+	for _, s := range sessions {
+		if err := st.CreateSession(s.id, s.project, ""); err != nil {
+			t.Fatalf("create session %s: %v", s.id, err)
+		}
+	}
+
+	tests := []struct {
+		name           string
+		url            string
+		expectedStatus int
+		expectedCount  int
+		checkFirstID   string
+	}{
+		{
+			name:           "all sessions limited to 5",
+			url:            "/sessions/recent",
+			expectedStatus: http.StatusOK,
+			expectedCount:  3,
+		},
+		{
+			name:           "filter by project alpha",
+			url:            "/sessions/recent?project=alpha",
+			expectedStatus: http.StatusOK,
+			expectedCount:  2,
+		},
+		{
+			name:           "filter by project beta",
+			url:            "/sessions/recent?project=beta",
+			expectedStatus: http.StatusOK,
+			expectedCount:  1,
+			checkFirstID:   "s-beta-1",
+		},
+		{
+			name:           "custom limit",
+			url:            "/sessions/recent?limit=1",
+			expectedStatus: http.StatusOK,
+			expectedCount:  1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Fatalf("expected %d, got %d", tt.expectedStatus, rec.Code)
+			}
+
+			var sessions []store.Session
+			if err := json.NewDecoder(rec.Body).Decode(&sessions); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+
+			if len(sessions) != tt.expectedCount {
+				t.Fatalf("expected %d sessions, got %d", tt.expectedCount, len(sessions))
+			}
+
+			if tt.checkFirstID != "" && sessions[0].ID != tt.checkFirstID {
+				t.Fatalf("expected first session %q, got %q", tt.checkFirstID, sessions[0].ID)
+			}
+		})
+	}
+}
+
+func TestHandlePassiveCapture(t *testing.T) {
+	st := newServerTestStore(t)
+	srv := New(st, 0)
+	h := srv.Handler()
+
+	if err := st.CreateSession("s-test", "test-project", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		body           string
+		expectedStatus int
+		checkError     bool
+	}{
+		{
+			name:           "valid capture",
+			body:           `{"session_id":"s-test","content":"## Goal\nTest goal\n## Accomplished\n- Task 1"}`,
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "missing session_id",
+			body:           `{"content":"test"}`,
+			expectedStatus: http.StatusBadRequest,
+			checkError:     true,
+		},
+		{
+			name:           "invalid json",
+			body:           `{invalid`,
+			expectedStatus: http.StatusBadRequest,
+			checkError:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/observations/passive", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Fatalf("expected %d, got %d", tt.expectedStatus, rec.Code)
+			}
+		})
+	}
+}
+
+func TestHandleRecentObservations(t *testing.T) {
+	st := newServerTestStore(t)
+	srv := New(st, 0)
+	h := srv.Handler()
+
+	// Create sessions and observations.
+	if err := st.CreateSession("s-alpha", "alpha", ""); err != nil {
+		t.Fatalf("create alpha session: %v", err)
+	}
+	if err := st.CreateSession("s-beta", "beta", ""); err != nil {
+		t.Fatalf("create beta session: %v", err)
+	}
+
+	observations := []store.AddObservationParams{
+		{SessionID: "s-alpha", Type: "decision", Title: "Alpha obs 1", Content: "content 1", Workspace: "alpha", Visibility: "project"},
+		{SessionID: "s-alpha", Type: "bugfix", Title: "Alpha obs 2", Content: "content 2", Workspace: "alpha", Visibility: "project"},
+		{SessionID: "s-beta", Type: "decision", Title: "Beta obs 1", Content: "content 3", Workspace: "beta", Visibility: "personal"},
+	}
+	for _, obs := range observations {
+		if _, err := st.AddObservation(obs); err != nil {
+			t.Fatalf("add observation %q: %v", obs.Title, err)
+		}
+	}
+
+	tests := []struct {
+		name           string
+		url            string
+		expectedStatus int
+		expectedCount  int
+	}{
+		{
+			name:           "all observations",
+			url:            "/observations/recent",
+			expectedStatus: http.StatusOK,
+			expectedCount:  3,
+		},
+		{
+			name:           "filter by project alpha",
+			url:            "/observations/recent?project=alpha",
+			expectedStatus: http.StatusOK,
+			expectedCount:  2,
+		},
+		{
+			name:           "filter by scope project",
+			url:            "/observations/recent?scope=project",
+			expectedStatus: http.StatusOK,
+			expectedCount:  2,
+		},
+		{
+			name:           "filter by scope personal",
+			url:            "/observations/recent?scope=personal",
+			expectedStatus: http.StatusOK,
+			expectedCount:  1,
+		},
+		{
+			name:           "custom limit",
+			url:            "/observations/recent?limit=1",
+			expectedStatus: http.StatusOK,
+			expectedCount:  1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Fatalf("expected %d, got %d", tt.expectedStatus, rec.Code)
+			}
+
+			var obs []store.Observation
+			if err := json.NewDecoder(rec.Body).Decode(&obs); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+
+			if len(obs) != tt.expectedCount {
+				t.Fatalf("expected %d observations, got %d", tt.expectedCount, len(obs))
+			}
+		})
+	}
+}
+
+func TestHandleSearch(t *testing.T) {
+	st := newServerTestStore(t)
+	srv := New(st, 0)
+	h := srv.Handler()
+
+	// Create sessions and observations.
+	if err := st.CreateSession("s-test", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	observations := []store.AddObservationParams{
+		{SessionID: "s-test", Type: "decision", Title: "Search target", Content: "searchable content here", Workspace: "test", Visibility: "project"},
+		{SessionID: "s-test", Type: "bugfix", Title: "Another obs", Content: "different content", Workspace: "test", Visibility: "project"},
+	}
+	for _, obs := range observations {
+		if _, err := st.AddObservation(obs); err != nil {
+			t.Fatalf("add observation: %v", err)
+		}
+	}
+
+	tests := []struct {
+		name           string
+		url            string
+		expectedStatus int
+		minResults     int
+	}{
+		{
+			name:           "search with query",
+			url:            "/search?q=searchable",
+			expectedStatus: http.StatusOK,
+			minResults:     1,
+		},
+		{
+			name:           "missing query parameter",
+			url:            "/search",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "search with filters",
+			url:            "/search?q=content&type=decision&workspace=test",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "search with limit",
+			url:            "/search?q=content&limit=1",
+			expectedStatus: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Fatalf("expected %d, got %d", tt.expectedStatus, rec.Code)
+			}
+
+			if tt.expectedStatus == http.StatusOK {
+				var results []store.SearchResult
+				if err := json.NewDecoder(rec.Body).Decode(&results); err != nil {
+					t.Fatalf("decode response: %v", err)
+				}
+				if tt.minResults > 0 && len(results) < tt.minResults {
+					t.Fatalf("expected at least %d results, got %d", tt.minResults, len(results))
+				}
+			}
+		})
+	}
+}
+
+func TestHandleDeleteObservation(t *testing.T) {
+	st := newServerTestStore(t)
+	srv := New(st, 0)
+	h := srv.Handler()
+
+	if err := st.CreateSession("s-test", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	id, err := st.AddObservation(store.AddObservationParams{
+		SessionID: "s-test",
+		Type:      "test",
+		Title:     "To Delete",
+		Content:   "content",
+	})
+	if err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		url            string
+		expectedStatus int
+	}{
+		{
+			name:           "soft delete",
+			url:            fmt.Sprintf("/observations/%d", id),
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "invalid observation id",
+			url:            "/observations/not-a-number",
+			expectedStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodDelete, tt.url, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Fatalf("expected %d, got %d", tt.expectedStatus, rec.Code)
+			}
+
+			if tt.expectedStatus == http.StatusOK {
+				var resp map[string]any
+				if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+					t.Fatalf("decode response: %v", err)
+				}
+				if resp["status"] != "deleted" {
+					t.Fatalf("expected status=deleted, got %v", resp["status"])
+				}
+			}
+		})
+	}
+}
+
+func TestHandleTimeline(t *testing.T) {
+	st := newServerTestStore(t)
+	srv := New(st, 0)
+	h := srv.Handler()
+
+	if err := st.CreateSession("s-test", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Create multiple observations.
+	var ids []int64
+	for i := 0; i < 5; i++ {
+		id, err := st.AddObservation(store.AddObservationParams{
+			SessionID: "s-test",
+			Type:      "test",
+			Title:     fmt.Sprintf("Obs %d", i),
+			Content:   "content",
+		})
+		if err != nil {
+			t.Fatalf("add observation: %v", err)
+		}
+		ids = append(ids, id)
+	}
+
+	tests := []struct {
+		name           string
+		url            string
+		expectedStatus int
+	}{
+		{
+			name:           "timeline with valid id",
+			url:            fmt.Sprintf("/timeline?observation_id=%d", ids[2]),
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "missing observation_id",
+			url:            "/timeline",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "invalid observation_id",
+			url:            "/timeline?observation_id=not-a-number",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "timeline with before/after params",
+			url:            fmt.Sprintf("/timeline?observation_id=%d&before=2&after=2", ids[2]),
+			expectedStatus: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Fatalf("expected %d, got %d", tt.expectedStatus, rec.Code)
+			}
+
+			if tt.expectedStatus == http.StatusOK {
+				var timeline store.TimelineResult
+				if err := json.NewDecoder(rec.Body).Decode(&timeline); err != nil {
+					t.Fatalf("decode response: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestHandleRecentPrompts(t *testing.T) {
+	st := newServerTestStore(t)
+	srv := New(st, 0)
+	h := srv.Handler()
+
+	if err := st.CreateSession("s-alpha", "alpha", ""); err != nil {
+		t.Fatalf("create alpha session: %v", err)
+	}
+	if err := st.CreateSession("s-beta", "beta", ""); err != nil {
+		t.Fatalf("create beta session: %v", err)
+	}
+
+	prompts := []store.AddPromptParams{
+		{SessionID: "s-alpha", Content: "what is alpha?", Project: "alpha"},
+		{SessionID: "s-alpha", Content: "tell me more", Project: "alpha"},
+		{SessionID: "s-beta", Content: "what is beta?", Project: "beta"},
+	}
+	for _, p := range prompts {
+		if _, err := st.AddPrompt(p); err != nil {
+			t.Fatalf("add prompt: %v", err)
+		}
+	}
+
+	tests := []struct {
+		name           string
+		url            string
+		expectedStatus int
+		expectedCount  int
+	}{
+		{
+			name:           "all prompts",
+			url:            "/prompts/recent",
+			expectedStatus: http.StatusOK,
+			expectedCount:  3,
+		},
+		{
+			name:           "filter by project alpha",
+			url:            "/prompts/recent?project=alpha",
+			expectedStatus: http.StatusOK,
+			expectedCount:  2,
+		},
+		{
+			name:           "custom limit",
+			url:            "/prompts/recent?limit=1",
+			expectedStatus: http.StatusOK,
+			expectedCount:  1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Fatalf("expected %d, got %d", tt.expectedStatus, rec.Code)
+			}
+
+			var prompts []store.Prompt
+			if err := json.NewDecoder(rec.Body).Decode(&prompts); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+
+			if len(prompts) != tt.expectedCount {
+				t.Fatalf("expected %d prompts, got %d", tt.expectedCount, len(prompts))
+			}
+		})
+	}
+}
+
+func TestHandleSearchPrompts(t *testing.T) {
+	st := newServerTestStore(t)
+	srv := New(st, 0)
+	h := srv.Handler()
+
+	if err := st.CreateSession("s-test", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	prompts := []store.AddPromptParams{
+		{SessionID: "s-test", Content: "searchable prompt text"},
+		{SessionID: "s-test", Content: "different content"},
+	}
+	for _, p := range prompts {
+		if _, err := st.AddPrompt(p); err != nil {
+			t.Fatalf("add prompt: %v", err)
+		}
+	}
+
+	tests := []struct {
+		name           string
+		url            string
+		expectedStatus int
+	}{
+		{
+			name:           "search prompts",
+			url:            "/prompts/search?q=searchable",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "missing query",
+			url:            "/prompts/search",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "search with project filter",
+			url:            "/prompts/search?q=prompt&project=test",
+			expectedStatus: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Fatalf("expected %d, got %d", tt.expectedStatus, rec.Code)
+			}
+		})
+	}
+}
+
+func TestHandleExport(t *testing.T) {
+	st := newServerTestStore(t)
+	srv := New(st, 0)
+	h := srv.Handler()
+
+	if err := st.CreateSession("s-test", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/export", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	contentType := rec.Header().Get("Content-Type")
+	if contentType != "application/json" {
+		t.Fatalf("expected Content-Type application/json, got %s", contentType)
+	}
+
+	contentDisp := rec.Header().Get("Content-Disposition")
+	if !strings.Contains(contentDisp, "attachment") {
+		t.Fatalf("expected Content-Disposition with attachment, got %s", contentDisp)
+	}
+
+	var data store.ExportData
+	if err := json.NewDecoder(rec.Body).Decode(&data); err != nil {
+		t.Fatalf("decode export data: %v", err)
+	}
+}
+
+func TestHandleContext(t *testing.T) {
+	st := newServerTestStore(t)
+	srv := New(st, 0)
+	h := srv.Handler()
+
+	if err := st.CreateSession("s-test", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		url            string
+		expectedStatus int
+	}{
+		{
+			name:           "context without filters",
+			url:            "/context",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "context with project filter",
+			url:            "/context?project=test",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "context with scope filter",
+			url:            "/context?scope=project",
+			expectedStatus: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Fatalf("expected %d, got %d", tt.expectedStatus, rec.Code)
+			}
+
+			var resp map[string]string
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if _, ok := resp["context"]; !ok {
+				t.Fatal("expected context field in response")
+			}
+		})
+	}
+}
+
+func TestHandleMigrateProject(t *testing.T) {
+	st := newServerTestStore(t)
+	srv := New(st, 0)
+	h := srv.Handler()
+
+	if err := st.CreateSession("s-old", "old-project", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := st.AddObservation(store.AddObservationParams{
+		SessionID: "s-old",
+		Type:      "test",
+		Title:     "Old observation",
+		Content:   "content",
+	}); err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		body           string
+		expectedStatus int
+		checkStatus    string
+	}{
+		{
+			name:           "valid migration",
+			body:           `{"old_project":"old-project","new_project":"new-project"}`,
+			expectedStatus: http.StatusOK,
+			checkStatus:    "migrated",
+		},
+		{
+			name:           "missing old_project",
+			body:           `{"new_project":"new-project"}`,
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "same project names",
+			body:           `{"old_project":"same","new_project":"same"}`,
+			expectedStatus: http.StatusOK,
+			checkStatus:    "skipped",
+		},
+		{
+			name:           "invalid json",
+			body:           `{invalid`,
+			expectedStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/projects/migrate", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Fatalf("expected %d, got %d", tt.expectedStatus, rec.Code)
+			}
+
+			if tt.checkStatus != "" {
+				var resp map[string]any
+				if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+					t.Fatalf("decode response: %v", err)
+				}
+				if resp["status"] != tt.checkStatus {
+					t.Fatalf("expected status=%s, got %v", tt.checkStatus, resp["status"])
+				}
+			}
+		})
+	}
+}
+
+func TestQueryIntHelper(t *testing.T) {
+	tests := []struct {
+		name       string
+		url        string
+		key        string
+		defaultVal int
+		expected   int
+	}{
+		{"valid int", "/test?limit=42", "limit", 10, 42},
+		{"missing param", "/test", "limit", 10, 10},
+		{"invalid int", "/test?limit=abc", "limit", 10, 10},
+		{"empty string", "/test?limit=", "limit", 10, 10},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			result := queryInt(req, tt.key, tt.defaultVal)
+			if result != tt.expected {
+				t.Fatalf("expected %d, got %d", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestQueryBoolHelper(t *testing.T) {
+	tests := []struct {
+		name       string
+		url        string
+		key        string
+		defaultVal bool
+		expected   bool
+	}{
+		{"true", "/test?hard=true", "hard", false, true},
+		{"false", "/test?hard=false", "hard", true, false},
+		{"missing param", "/test", "hard", true, true},
+		{"invalid bool", "/test?hard=maybe", "hard", false, false},
+		{"1 as true", "/test?hard=1", "hard", false, true},
+		{"0 as false", "/test?hard=0", "hard", true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			result := queryBool(req, tt.key, tt.defaultVal)
+			if result != tt.expected {
+				t.Fatalf("expected %v, got %v", tt.expected, result)
+			}
+		})
 	}
 }

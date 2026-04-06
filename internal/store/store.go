@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Syfra3/ancora/internal/visibility"
 	_ "modernc.org/sqlite"
 )
 
@@ -553,7 +554,6 @@ func (s *Store) migrate() error {
 		definition string
 	}{
 		{name: "sync_id", definition: "TEXT"},
-		{name: "scope", definition: "TEXT NOT NULL DEFAULT 'project'"},
 		{name: "topic_key", definition: "TEXT"},
 		{name: "normalized_hash", definition: "TEXT"},
 		{name: "revision_count", definition: "INTEGER NOT NULL DEFAULT 1"},
@@ -581,11 +581,8 @@ func (s *Store) migrate() error {
 	}
 
 	if _, err := s.execHook(s.db, `
-		CREATE INDEX IF NOT EXISTS idx_obs_scope ON observations(scope);
 		CREATE INDEX IF NOT EXISTS idx_obs_sync_id ON observations(sync_id);
-		CREATE INDEX IF NOT EXISTS idx_obs_topic ON observations(topic_key, project, scope, updated_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_obs_deleted ON observations(deleted_at);
-		CREATE INDEX IF NOT EXISTS idx_obs_dedupe ON observations(normalized_hash, project, scope, type, title, created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_prompts_sync_id ON user_prompts(sync_id);
 		CREATE INDEX IF NOT EXISTS idx_sync_mutations_target_seq ON sync_mutations(target_key, seq);
 		CREATE INDEX IF NOT EXISTS idx_sync_mutations_pending ON sync_mutations(target_key, acked_at, seq);
@@ -622,9 +619,7 @@ func (s *Store) migrate() error {
 		return err
 	}
 
-	if _, err := s.execHook(s.db, `UPDATE observations SET scope = 'work', visibility = 'work' WHERE scope IS NULL OR scope = ''`); err != nil {
-		return err
-	}
+	// PR5: Removed scope backfill - old scope column dropped in migration 004
 	if _, err := s.execHook(s.db, `UPDATE observations SET topic_key = NULL WHERE topic_key = ''`); err != nil {
 		return err
 	}
@@ -657,7 +652,8 @@ func (s *Store) migrate() error {
 		return err
 	}
 
-	// Backfill new schema fields from old fields (PR1: Schema migration)
+	// PR5: Keep migrateToNewSchema for backward compatibility with old databases
+	// (it checks if old columns exist before backfilling)
 	if err := s.migrateToNewSchema(); err != nil {
 		return err
 	}
@@ -671,20 +667,20 @@ func (s *Store) migrate() error {
 	if err == sql.ErrNoRows {
 		triggers := `
 			CREATE TRIGGER obs_fts_insert AFTER INSERT ON observations BEGIN
-				INSERT INTO observations_fts(rowid, title, content, tool_name, type, project, topic_key)
-				VALUES (new.id, new.title, new.content, new.tool_name, new.type, new.project, new.topic_key);
+				INSERT INTO observations_fts(rowid, title, content, tool_name, type, workspace, topic_key)
+				VALUES (new.id, new.title, new.content, new.tool_name, new.type, new.workspace, new.topic_key);
 			END;
 
 			CREATE TRIGGER obs_fts_delete AFTER DELETE ON observations BEGIN
-				INSERT INTO observations_fts(observations_fts, rowid, title, content, tool_name, type, project, topic_key)
-				VALUES ('delete', old.id, old.title, old.content, old.tool_name, old.type, old.project, old.topic_key);
+				INSERT INTO observations_fts(observations_fts, rowid, title, content, tool_name, type, workspace, topic_key)
+				VALUES ('delete', old.id, old.title, old.content, old.tool_name, old.type, old.workspace, old.topic_key);
 			END;
 
 			CREATE TRIGGER obs_fts_update AFTER UPDATE ON observations BEGIN
-				INSERT INTO observations_fts(observations_fts, rowid, title, content, tool_name, type, project, topic_key)
-				VALUES ('delete', old.id, old.title, old.content, old.tool_name, old.type, old.project, old.topic_key);
-				INSERT INTO observations_fts(rowid, title, content, tool_name, type, project, topic_key)
-				VALUES (new.id, new.title, new.content, new.tool_name, new.type, new.project, new.topic_key);
+				INSERT INTO observations_fts(observations_fts, rowid, title, content, tool_name, type, workspace, topic_key)
+				VALUES ('delete', old.id, old.title, old.content, old.tool_name, old.type, old.workspace, old.topic_key);
+				INSERT INTO observations_fts(rowid, title, content, tool_name, type, workspace, topic_key)
+				VALUES (new.id, new.title, new.content, new.tool_name, new.type, new.workspace, new.topic_key);
 			END;
 		`
 		if _, err := s.execHook(s.db, triggers); err != nil {
@@ -693,6 +689,11 @@ func (s *Store) migrate() error {
 	}
 
 	if err := s.migrateFTSTopicKey(); err != nil {
+		return err
+	}
+
+	// PR5: Migrate FTS from project to workspace column
+	if err := s.migrateFTSWorkspace(); err != nil {
 		return err
 	}
 
@@ -746,34 +747,88 @@ func (s *Store) migrateFTSTopicKey() error {
 			content,
 			tool_name,
 			type,
-			project,
+			workspace,
 			topic_key,
 			content='observations',
 			content_rowid='id'
 		);
-		INSERT INTO observations_fts(rowid, title, content, tool_name, type, project, topic_key)
-		SELECT id, title, content, tool_name, type, project, topic_key
+		INSERT INTO observations_fts(rowid, title, content, tool_name, type, workspace, topic_key)
+		SELECT id, title, content, tool_name, type, workspace, topic_key
 		FROM observations
 		WHERE deleted_at IS NULL;
 
 		CREATE TRIGGER obs_fts_insert AFTER INSERT ON observations BEGIN
-			INSERT INTO observations_fts(rowid, title, content, tool_name, type, project, topic_key)
-			VALUES (new.id, new.title, new.content, new.tool_name, new.type, new.project, new.topic_key);
+			INSERT INTO observations_fts(rowid, title, content, tool_name, type, workspace, topic_key)
+			VALUES (new.id, new.title, new.content, new.tool_name, new.type, new.workspace, new.topic_key);
 		END;
 
 		CREATE TRIGGER obs_fts_delete AFTER DELETE ON observations BEGIN
-			INSERT INTO observations_fts(observations_fts, rowid, title, content, tool_name, type, project, topic_key)
-			VALUES ('delete', old.id, old.title, old.content, old.tool_name, old.type, old.project, old.topic_key);
+			INSERT INTO observations_fts(observations_fts, rowid, title, content, tool_name, type, workspace, topic_key)
+			VALUES ('delete', old.id, old.title, old.content, old.tool_name, old.type, old.workspace, old.topic_key);
 		END;
 
 		CREATE TRIGGER obs_fts_update AFTER UPDATE ON observations BEGIN
-			INSERT INTO observations_fts(observations_fts, rowid, title, content, tool_name, type, project, topic_key)
-			VALUES ('delete', old.id, old.title, old.content, old.tool_name, old.type, old.project, old.topic_key);
-			INSERT INTO observations_fts(rowid, title, content, tool_name, type, project, topic_key)
-			VALUES (new.id, new.title, new.content, new.tool_name, new.type, new.project, new.topic_key);
+			INSERT INTO observations_fts(observations_fts, rowid, title, content, tool_name, type, workspace, topic_key)
+			VALUES ('delete', old.id, old.title, old.content, old.tool_name, old.type, old.workspace, old.topic_key);
+			INSERT INTO observations_fts(rowid, title, content, tool_name, type, workspace, topic_key)
+			VALUES (new.id, new.title, new.content, new.tool_name, new.type, new.workspace, new.topic_key);
 		END;
 	`); err != nil {
 		return fmt.Errorf("migrate fts topic_key: %w", err)
+	}
+	return nil
+}
+
+// migrateFTSWorkspace migrates observations_fts from project to workspace column (PR5).
+// This runs after migrateFTSTopicKey, so we know topic_key exists.
+// We check if the FTS table has 'project' column - if yes, rebuild with 'workspace'.
+func (s *Store) migrateFTSWorkspace() error {
+	var colCount int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM pragma_table_xinfo('observations_fts') WHERE name = 'project'").Scan(&colCount)
+	if err != nil || colCount == 0 {
+		// No 'project' column found - migration already done
+		return nil
+	}
+
+	// FTS table still has 'project' column - rebuild with 'workspace'
+	if _, err := s.execHook(s.db, `
+		DROP TRIGGER IF EXISTS obs_fts_insert;
+		DROP TRIGGER IF EXISTS obs_fts_update;
+		DROP TRIGGER IF EXISTS obs_fts_delete;
+		DROP TABLE IF EXISTS observations_fts;
+		CREATE VIRTUAL TABLE observations_fts USING fts5(
+			title,
+			content,
+			tool_name,
+			type,
+			workspace,
+			topic_key,
+			content='observations',
+			content_rowid='id'
+		);
+		INSERT INTO observations_fts(rowid, title, content, tool_name, type, workspace, topic_key)
+		SELECT id, title, content, tool_name, type, workspace, topic_key
+		FROM observations
+		WHERE deleted_at IS NULL;
+
+		CREATE TRIGGER obs_fts_insert AFTER INSERT ON observations BEGIN
+			INSERT INTO observations_fts(rowid, title, content, tool_name, type, workspace, topic_key)
+			VALUES (new.id, new.title, new.content, new.tool_name, new.type, new.workspace, new.topic_key);
+		END;
+
+		CREATE TRIGGER obs_fts_delete AFTER DELETE ON observations BEGIN
+			INSERT INTO observations_fts(observations_fts, rowid, title, content, tool_name, type, workspace, topic_key)
+			VALUES ('delete', old.id, old.title, old.content, old.tool_name, old.type, old.workspace, old.topic_key);
+		END;
+
+		CREATE TRIGGER obs_fts_update AFTER UPDATE ON observations BEGIN
+			INSERT INTO observations_fts(observations_fts, rowid, title, content, tool_name, type, workspace, topic_key)
+			VALUES ('delete', old.id, old.title, old.content, old.tool_name, old.type, old.workspace, old.topic_key);
+			INSERT INTO observations_fts(rowid, title, content, tool_name, type, workspace, topic_key)
+			VALUES (new.id, new.title, new.content, new.tool_name, new.type, new.workspace, new.topic_key);
+		END;
+	`); err != nil {
+		return fmt.Errorf("migrate fts workspace: %w", err)
 	}
 	return nil
 }
@@ -989,6 +1044,11 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 
 	if len(content) > s.cfg.MaxObservationLength {
 		content = content[:s.cfg.MaxObservationLength] + "... [truncated]"
+	}
+
+	// PR4: Auto-infer visibility if not provided
+	if p.Visibility == "" {
+		p.Visibility = visibility.InferVisibility(title, content)
 	}
 	visibility := normalizeScope(p.Visibility)
 	normHash := hashNormalized(content)
@@ -2492,10 +2552,9 @@ func (s *Store) MigrateProject(oldName, newName string) (*MigrateResult, error) 
 	result := &MigrateResult{Migrated: true}
 
 	err = s.withTx(func(tx *sql.Tx) error {
-		// PR2: Update BOTH old and new fields
-		// FTS triggers handle index updates automatically on UPDATE
-		res, err := s.execHook(tx, `UPDATE observations SET project = ?, workspace = ? WHERE project = ? OR workspace = ?`,
-			newName, newName, oldName, oldName)
+		// Update workspace column (FTS triggers handle index updates automatically)
+		res, err := s.execHook(tx, `UPDATE observations SET workspace = ? WHERE workspace = ?`,
+			newName, oldName)
 		if err != nil {
 			return fmt.Errorf("migrate observations: %w", err)
 		}
@@ -2536,9 +2595,9 @@ type ProjectNameCount struct {
 // ordered alphabetically. Used for fuzzy matching and consolidation.
 func (s *Store) ListProjectNames() ([]string, error) {
 	rows, err := s.queryItHook(s.db,
-		`SELECT DISTINCT project FROM observations
-		 WHERE project IS NOT NULL AND project != '' AND deleted_at IS NULL
-		 ORDER BY project`,
+		`SELECT DISTINCT workspace FROM observations
+		 WHERE workspace IS NOT NULL AND workspace != '' AND deleted_at IS NULL
+		 ORDER BY workspace`,
 	)
 	if err != nil {
 		return nil, err
@@ -2570,10 +2629,10 @@ type ProjectStats struct {
 func (s *Store) ListProjectsWithStats() ([]ProjectStats, error) {
 	// Observation counts per project
 	obsRows, err := s.queryItHook(s.db,
-		`SELECT project, COUNT(*) as cnt
+		`SELECT workspace, COUNT(*) as cnt
 		 FROM observations
-		 WHERE project IS NOT NULL AND project != '' AND deleted_at IS NULL
-		 GROUP BY project`,
+		 WHERE workspace IS NOT NULL AND workspace != '' AND deleted_at IS NULL
+		 GROUP BY workspace`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list projects obs: %w", err)
@@ -2721,9 +2780,9 @@ func (s *Store) MergeProjects(sources []string, canonical string) (*MergeResult,
 				continue
 			}
 
-			// PR2: Update BOTH old and new fields
-			res, err := s.execHook(tx, `UPDATE observations SET project = ?, workspace = ? WHERE project = ? OR workspace = ?`,
-				canonical, canonical, src, src)
+			// Update workspace column (old project column removed in PR5)
+			res, err := s.execHook(tx, `UPDATE observations SET workspace = ? WHERE workspace = ?`,
+				canonical, src)
 			if err != nil {
 				return fmt.Errorf("merge observations %q → %q: %w", src, canonical, err)
 			}
@@ -3359,6 +3418,18 @@ func (s *Store) migrateLegacyObservationsTable() error {
 		return nil
 	}
 
+	// Check if old columns (project, scope) still exist
+	// If migration 004 already ran, these columns are gone and we can't migrate
+	var oldColCount int
+	err = s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('observations') WHERE name IN ('project', 'scope')`).Scan(&oldColCount)
+	if err != nil {
+		return fmt.Errorf("check for old columns: %w", err)
+	}
+	if oldColCount == 0 {
+		// Old columns don't exist - migration 004 already ran, skip legacy migration
+		return nil
+	}
+
 	tx, err := s.beginTxHook()
 	if err != nil {
 		return fmt.Errorf("migrate legacy observations: begin tx: %w", err)
@@ -3476,11 +3547,20 @@ func (s *Store) migrateLegacyObservationsTable() error {
 }
 
 // migrateToNewSchema backfills workspace, visibility, and organization from project and scope.
-// This is PR1 of the schema refactor - adds new columns alongside old ones for backward compatibility.
+// PR5: Still needed for backward compatibility with old databases that have project/scope columns.
+// After migration 004, the old project/scope columns no longer exist, so this becomes a no-op.
 func (s *Store) migrateToNewSchema() error {
+	// Check if old columns still exist (they won't after migration 004)
+	var oldColCount int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('observations') WHERE name IN ('project', 'scope')`).Scan(&oldColCount)
+	if err != nil || oldColCount == 0 {
+		// Old columns don't exist - migration 004 already ran, nothing to do
+		return nil
+	}
+
 	// Check if migration already ran (workspace column populated)
 	var count int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE workspace IS NOT NULL`).Scan(&count)
+	err = s.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE workspace IS NOT NULL`).Scan(&count)
 	if err != nil {
 		return fmt.Errorf("check migration status: %w", err)
 	}
@@ -3496,7 +3576,7 @@ func (s *Store) migrateToNewSchema() error {
 		return nil
 	}
 
-	// Backfill new fields from old fields
+	// Backfill new fields from old fields (only works if old columns still exist)
 	_, err = s.execHook(s.db, `
 		UPDATE observations
 		SET
@@ -3885,7 +3965,7 @@ func (s *Store) PassiveCapture(p PassiveCaptureParams) (*PassiveCaptureResult, e
 		err := s.db.QueryRow(
 			`SELECT id FROM observations
 			 WHERE normalized_hash = ?
-			   AND ifnull(project, '') = ifnull(?, '')
+			   AND ifnull(workspace, '') = ifnull(?, '')
 			   AND deleted_at IS NULL
 			 LIMIT 1`,
 			normHash, nullableString(p.Project),

@@ -147,7 +147,13 @@ syfra setup opencode     # Auto-install for OpenCode
 
 ```bash
 # Search memories
-syfra search "authentication bug" --project=myapp
+syfra search "authentication bug" --workspace=myapp
+
+# Save memory (visibility auto-inferred)
+syfra save "Fixed N+1 query" "Optimized user list query" --workspace=myapp --type=bugfix
+
+# Save personal memory
+syfra save "2026 Goals" "my goals for the year" --visibility=personal
 
 # View statistics
 syfra stats
@@ -226,16 +232,19 @@ Management tools for TUI/CLI/dashboards:
 ### Memory Workflow
 
 ```bash
-# Agent saves a decision proactively
+# Agent saves a decision proactively (visibility auto-inferred as 'work')
 syfra save "Migrated to bcrypt from SHA256" \
   "**What**: Replaced password hashing
 **Why**: Security audit flagged weak hashing
 **Where**: internal/auth/hash.go
 **Learned**: bcrypt cost=12 is optimal for our load" \
-  --type=decision --project=webapp
+  --type=decision --workspace=webapp --organization=mycompany
+
+# Save personal memory (auto-inferred as 'personal')
+syfra save "Health Goals 2026" "my health goals: lose 10 lbs, run 5k" --workspace=life
 
 # Later: search for past decisions
-syfra search "password hashing" --type=decision --project=webapp
+syfra search "password hashing" --type=decision --workspace=webapp
 
 # View timeline context around observation #127
 syfra timeline 127 --before=5 --after=5
@@ -270,9 +279,9 @@ syfra serve 8080
 # GET  /health
 # POST /sessions, GET /sessions/recent
 # POST /observations, GET /observations/recent
-# GET  /search?q=query&project=&type=&scope=&limit=
+# GET  /search?q=query&workspace=&type=&visibility=&organization=&limit=
 # GET  /timeline?observation_id=&before=&after=
-# GET  /context?project=&scope=
+# GET  /context?workspace=&visibility=
 # POST /observations/passive
 # GET  /export, POST /import
 # GET  /stats
@@ -284,10 +293,12 @@ syfra serve 8080
 ### Environment Variables
 
 ```bash
-ANCORA_DATA_DIR=/path/to/data    # Override data directory (default: ~/.ancora)
-ANCORA_PORT=8080                 # Override HTTP server port (default: 7437)
-ANCORA_PROJECT=myproject         # Override auto-detected project for MCP
-ANCORA_EMBED_MODEL=/path/model   # Path to GGUF embedding model
+ANCORA_DATA_DIR=/path/to/data      # Override data directory (default: ~/.ancora)
+ANCORA_PORT=8080                   # Override HTTP server port (default: 7437)
+ANCORA_PROJECT=myproject           # Override auto-detected workspace for MCP (backward compat)
+ANCORA_WORKSPACE=myworkspace       # Override auto-detected workspace for MCP
+ANCORA_ORGANIZATION=mycompany      # Set organization for work observations
+ANCORA_EMBED_MODEL=/path/model     # Path to GGUF embedding model
 ```
 
 ### Data Directory
@@ -312,9 +323,9 @@ ANCORA_EMBED_MODEL=/path/model   # Path to GGUF embedding model
 **Observation Types:**
 `tool_use`, `file_change`, `command`, `file_read`, `search`, `manual`, `decision`, `architecture`, `bugfix`, `pattern`, `config`, `discovery`, `learning`, `preference`, `session_summary`
 
-**Scopes:**
-- `project` - Scoped to specific project (default)
-- `personal` - User-wide memories
+**Visibility Levels:**
+- `work` - Professional/work knowledge (default, auto-inferred). Can sync to Syfra Cloud if organization enrolled.
+- `personal` - Private life knowledge (health, finances, goals). NEVER synced automatically. Auto-inferred from triggers like "my health", "my finances", "personal", "private", etc.
 
 ## Testing
 
@@ -384,17 +395,30 @@ score(doc) = Σ [1/(60 + rank_keyword)] + [1/(60 + rank_semantic)]
 - Results sorted by combined score
 - Graceful degradation to single mode if needed
 
-## Project Detection
+## Workspace Detection
 
 **Priority:**
-1. `--project=name` flag
-2. `ANCORA_PROJECT` env var
+1. `--workspace=name` flag (or `--project` for backward compatibility)
+2. `ANCORA_WORKSPACE` or `ANCORA_PROJECT` env var
 3. Git remote origin URL (extracts repo name)
 4. Git root directory basename
 5. Current directory basename
 6. Fallback: "unknown"
 
 **Normalization:** Always lowercase, trimmed
+
+## Visibility Auto-Detection
+
+When `visibility` is omitted, Ancora automatically infers it from the title and content:
+
+**Personal triggers** (classified as `visibility=personal`):
+- "my goals", "my health", "my weight", "my finances", "my salary", "my budget"
+- "personal", "private", "family", "home", "vacation", "medical"
+- "body measurement", "blood pressure", "doctor visit", "bank account", etc.
+
+**Default**: If no personal triggers found, defaults to `work`
+
+**Override**: Explicitly set `--visibility=work` or `--visibility=personal` to override auto-detection
 
 ## Deduplication
 

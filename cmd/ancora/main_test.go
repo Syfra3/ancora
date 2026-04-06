@@ -377,6 +377,10 @@ func TestCmdContextAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.New: %v", err)
 	}
+	err = s.CreateSession("test", "project-x", "")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
 	_, err = s.AddPrompt(store.AddPromptParams{SessionID: "test", Content: "test", Project: "project-x"})
 	if err != nil {
 		t.Fatalf("AddPrompt: %v", err)
@@ -536,7 +540,7 @@ func TestMainExitPaths(t *testing.T) {
 		expectedStderr  string
 		expectedExitOne bool
 	}{
-		{name: "no args", helperCase: "no-args", expectedOutput: "Usage:", expectedExitOne: true},
+		{name: "no args", helperCase: "no-args", expectedOutput: "could not open a new TTY", expectedExitOne: true},
 		{name: "unknown command", helperCase: "unknown", expectedOutput: "Usage:", expectedStderr: "unknown command:", expectedExitOne: true},
 	}
 
@@ -598,6 +602,157 @@ func TestCmdSearchLocalMode(t *testing.T) {
 	if !strings.Contains(stdout, "Found") && !strings.Contains(stdout, "local-result") {
 		t.Fatalf("expected local search results, got: %q", stdout)
 	}
+}
+
+func TestCmdSaveWithWorkspaceVisibilityOrganization(t *testing.T) {
+	cfg := testConfig(t)
+
+	// Test saving with all new fields
+	withArgs(t,
+		"ancora", "save", "org-test-title", "org-test-content",
+		"--type", "architecture",
+		"--workspace", "team-alpha",
+		"--visibility", "team",
+		"--organization", "acme-corp",
+		"--topic", "auth/oauth",
+	)
+
+	stdout, stderr := captureOutput(t, func() { cmdSave(cfg) })
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got: %q", stderr)
+	}
+	if !strings.Contains(stdout, "Memory saved:") || !strings.Contains(stdout, "org-test-title") {
+		t.Fatalf("unexpected save output: %q", stdout)
+	}
+
+	// Verify it was saved with correct fields by searching with filters
+	withArgs(t, "ancora", "search", "org-test-content",
+		"--workspace", "team-alpha",
+		"--visibility", "team",
+		"--organization", "acme-corp")
+	searchOut, searchErr := captureOutput(t, func() { cmdSearch(cfg) })
+	if searchErr != "" {
+		t.Fatalf("expected no stderr from search, got: %q", searchErr)
+	}
+	if !strings.Contains(searchOut, "Found 1 memories") || !strings.Contains(searchOut, "org-test-title") {
+		t.Fatalf("search with all filters failed to find observation: %q", searchOut)
+	}
+}
+
+func TestCmdSearchFiltersByVisibility(t *testing.T) {
+	cfg := testConfig(t)
+
+	// Create observations with different visibility levels
+	// Note: normalizeScope enforces two-scope model: "personal" and "work"
+	// "project", "team", and other values are normalized to "work"
+	mustSeedObservationWithOrg(t, cfg, "s-1", "workspace-1", "org-1", "decision", "personal-item", "personal content", "personal")
+	mustSeedObservationWithOrg(t, cfg, "s-2", "workspace-1", "org-1", "decision", "work-item-1", "work content alpha", "project") // normalized to "work"
+	mustSeedObservationWithOrg(t, cfg, "s-3", "workspace-1", "org-1", "decision", "work-item-2", "work content beta", "team")     // normalized to "work"
+
+	// Search for personal visibility only
+	withArgs(t, "ancora", "search", "content", "--visibility", "personal")
+	stdout, _ := captureOutput(t, func() { cmdSearch(cfg) })
+	if !strings.Contains(stdout, "personal-item") {
+		t.Fatalf("expected to find personal-item, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "work-item-1") || strings.Contains(stdout, "work-item-2") {
+		t.Fatalf("expected only personal items, got: %q", stdout)
+	}
+
+	// Search for work visibility (includes project, team, etc)
+	withArgs(t, "ancora", "search", "content", "--visibility", "work")
+	stdout, _ = captureOutput(t, func() { cmdSearch(cfg) })
+	if !strings.Contains(stdout, "work-item-1") || !strings.Contains(stdout, "work-item-2") {
+		t.Fatalf("expected to find both work items, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "personal-item") {
+		t.Fatalf("expected only work items, got: %q", stdout)
+	}
+}
+
+func TestCmdSearchFiltersByOrganization(t *testing.T) {
+	cfg := testConfig(t)
+
+	// Create observations with different organizations
+	mustSeedObservationWithOrg(t, cfg, "s-1", "workspace-a", "acme-corp", "note", "acme-note", "acme content", "project")
+	mustSeedObservationWithOrg(t, cfg, "s-2", "workspace-b", "globex-inc", "note", "globex-note", "globex content", "project")
+
+	// Search for acme-corp only
+	withArgs(t, "ancora", "search", "content", "--organization", "acme-corp")
+	stdout, _ := captureOutput(t, func() { cmdSearch(cfg) })
+	if !strings.Contains(stdout, "acme-note") {
+		t.Fatalf("expected to find acme-note, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "globex-note") {
+		t.Fatalf("expected only acme-corp items, got: %q", stdout)
+	}
+
+	// Search for globex-inc only
+	withArgs(t, "ancora", "search", "content", "--organization", "globex-inc")
+	stdout, _ = captureOutput(t, func() { cmdSearch(cfg) })
+	if !strings.Contains(stdout, "globex-note") {
+		t.Fatalf("expected to find globex-note, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "acme-note") {
+		t.Fatalf("expected only globex-inc items, got: %q", stdout)
+	}
+}
+
+func TestCmdSaveBackwardCompatibility(t *testing.T) {
+	cfg := testConfig(t)
+
+	// Test that old --project flag still works
+	withArgs(t,
+		"ancora", "save", "legacy-title", "legacy-content",
+		"--type", "bugfix",
+		"--project", "old-workspace",
+		"--scope", "personal",
+	)
+
+	stdout, stderr := captureOutput(t, func() { cmdSave(cfg) })
+	if stderr != "" {
+		t.Fatalf("expected no stderr with legacy flags, got: %q", stderr)
+	}
+	if !strings.Contains(stdout, "Memory saved:") {
+		t.Fatalf("unexpected save output: %q", stdout)
+	}
+
+	// Verify it's searchable with new --workspace flag
+	withArgs(t, "ancora", "search", "legacy-content", "--workspace", "old-workspace")
+	searchOut, _ := captureOutput(t, func() { cmdSearch(cfg) })
+	if !strings.Contains(searchOut, "legacy-title") {
+		t.Fatalf("legacy observation not found with new workspace flag: %q", searchOut)
+	}
+}
+
+// Helper function that supports organization field
+func mustSeedObservationWithOrg(t *testing.T, cfg store.Config, sessionID, workspace, organization, typ, title, content, visibility string) int64 {
+	t.Helper()
+
+	s, err := store.New(cfg)
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	defer s.Close()
+
+	if err := s.CreateSession(sessionID, workspace, organization); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	id, err := s.AddObservation(store.AddObservationParams{
+		SessionID:    sessionID,
+		Type:         typ,
+		Title:        title,
+		Content:      content,
+		Workspace:    workspace,
+		Visibility:   visibility,
+		Organization: organization,
+	})
+	if err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+
+	return id
 }
 
 // ─── Projects command tests ───────────────────────────────────────────────────

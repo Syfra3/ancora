@@ -292,12 +292,12 @@ func TestHandleSearchAndCRUDHandlers(t *testing.T) {
 	}
 
 	obsID, err := s.AddObservation(store.AddObservationParams{
-		SessionID: "s-mcp",
-		Type:      "bugfix",
-		Title:     "Fix panic",
-		Content:   "Fix panic in parser branch when args are missing",
-		Workspace:   "engram",
-		Visibility:     "project",
+		SessionID:  "s-mcp",
+		Type:       "bugfix",
+		Title:      "Fix panic",
+		Content:    "Fix panic in parser branch when args are missing",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add observation: %v", err)
@@ -374,7 +374,7 @@ func TestHandlePromptContextStatsTimelineAndSessionHandlers(t *testing.T) {
 		Type:      "decision",
 		Title:     "Auth decision",
 		Content:   "Keep auth in middleware",
-		Workspace:   "engram",
+		Workspace: "engram",
 	})
 	if err != nil {
 		t.Fatalf("add observation: %v", err)
@@ -560,7 +560,7 @@ func TestMCPHandlersReturnErrorsWhenStoreClosed(t *testing.T) {
 		Type:      "decision",
 		Title:     "Title",
 		Content:   "Content",
-		Workspace:   "engram",
+		Workspace: "engram",
 	})
 	if err != nil {
 		t.Fatalf("seed observation: %v", err)
@@ -764,12 +764,12 @@ func TestHandleUpdateAcceptsAllOptionalFields(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	id, err := s.AddObservation(store.AddObservationParams{
-		SessionID: "s-all-fields",
-		Type:      "decision",
-		Title:     "Original",
-		Content:   "Original content",
-		Workspace:   "engram",
-		Visibility:     "project",
+		SessionID:  "s-all-fields",
+		Type:       "decision",
+		Title:      "Original",
+		Content:    "Original content",
+		Workspace:  "engram",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add observation: %v", err)
@@ -879,7 +879,7 @@ func TestHandleGetObservationIncludesTopicAndToolMetadata(t *testing.T) {
 		Type:      "architecture",
 		Title:     "Auth model",
 		Content:   "Details",
-		Workspace:   "engram",
+		Workspace: "engram",
 		ToolName:  "mcp-passive",
 		TopicKey:  "architecture/auth-model",
 	})
@@ -1390,8 +1390,8 @@ func TestHandleSaveCreatesProjectScopedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected session manual-save-projectb to exist: %v", err)
 	}
-	if sessA.Project != "projectb" {
-		t.Fatalf("expected project=projectb (normalized), got %q", sessA.Project)
+	if sessB.Project != "projectb" {
+		t.Fatalf("expected project=projectb (normalized), got %q", sessB.Project)
 	}
 }
 
@@ -1675,7 +1675,7 @@ func TestHandleMergeProjects(t *testing.T) {
 		Type:      "decision",
 		Title:     "From Engram",
 		Content:   "Content from Engram",
-		Workspace:   "engram", // store normalizes to lowercase
+		Workspace: "engram", // store normalizes to lowercase
 	}); err != nil {
 		t.Fatalf("add observation Engram: %v", err)
 	}
@@ -1688,7 +1688,7 @@ func TestHandleMergeProjects(t *testing.T) {
 		Type:      "decision",
 		Title:     "From engram-memory",
 		Content:   "Content from engram-memory",
-		Workspace:   "engram-memory",
+		Workspace: "engram-memory",
 	}); err != nil {
 		t.Fatalf("add observation engram-memory: %v", err)
 	}
@@ -1839,20 +1839,20 @@ func TestHandleSearchWithoutProjectSearchesAllLocalMemory(t *testing.T) {
 
 	for _, obs := range []store.AddObservationParams{
 		{
-			SessionID: "s-default",
-			Type:      "decision",
-			Title:     "Default project hit",
-			Content:   "shared cross project query",
-			Workspace:   "default-project",
-			Visibility:     "project",
+			SessionID:  "s-default",
+			Type:       "decision",
+			Title:      "Default project hit",
+			Content:    "shared cross project query",
+			Workspace:  "default-project",
+			Visibility: "project",
 		},
 		{
-			SessionID: "s-other",
-			Type:      "decision",
-			Title:     "Other project hit",
-			Content:   "shared cross project query",
-			Workspace:   "other-project",
-			Visibility:     "project",
+			SessionID:  "s-other",
+			Type:       "decision",
+			Title:      "Other project hit",
+			Content:    "shared cross project query",
+			Workspace:  "other-project",
+			Visibility: "project",
 		},
 	} {
 		if _, err := s.AddObservation(obs); err != nil {
@@ -1887,12 +1887,12 @@ func TestHybridSearchWithMockEmbedder(t *testing.T) {
 
 	// Add test observation
 	_, err := s.AddObservation(store.AddObservationParams{
-		SessionID: "s-hybrid",
-		Type:      "test",
-		Title:     "PC Components Test",
-		Content:   "CPU Intel i9-14900K GPU RTX 5080 RAM 64GB",
-		Workspace:   "test",
-		Visibility:     "project",
+		SessionID:  "s-hybrid",
+		Type:       "test",
+		Title:      "PC Components Test",
+		Content:    "CPU Intel i9-14900K GPU RTX 5080 RAM 64GB",
+		Workspace:  "test",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add observation: %v", err)
@@ -1946,12 +1946,12 @@ func TestHybridSearchGracefulFallback(t *testing.T) {
 	}
 
 	_, err := s.AddObservation(store.AddObservationParams{
-		SessionID: "s-fallback",
-		Type:      "test",
-		Title:     "Fallback Test",
-		Content:   "keyword search fallback",
-		Workspace:   "test",
-		Visibility:     "project",
+		SessionID:  "s-fallback",
+		Type:       "test",
+		Title:      "Fallback Test",
+		Content:    "keyword search fallback",
+		Workspace:  "test",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add observation: %v", err)

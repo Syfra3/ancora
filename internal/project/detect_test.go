@@ -44,7 +44,7 @@ func TestExtractRepoName(t *testing.T) {
 		{
 			name: "HTTPS org with dots",
 			url:  "https://github.com/Syfra3/ancora.git",
-			want: "syfra",
+			want: "ancora",
 		},
 		{
 			name: "Repo name without .git from SSH",
@@ -114,8 +114,8 @@ func TestDetectProject_GitRemote_HTTPS(t *testing.T) {
 	}
 
 	got := DetectProject(dir)
-	if got != "syfra" {
-		t.Errorf("DetectProject HTTPS remote = %q; want %q", got, "syfra")
+	if got != "ancora" {
+		t.Errorf("DetectProject HTTPS remote = %q; want %q", got, "ancora")
 	}
 }
 
