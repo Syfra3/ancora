@@ -112,7 +112,7 @@ release: release-check test lint
 	@echo "  2. Create GitHub release with artifacts"
 	@echo "  3. Update Homebrew formula"
 	@echo ""
-	@echo "Monitor progress: https://github.com/syfra-io/syfra/actions"
+	@echo "Monitor progress: https://github.com/Syfra3/ancora/actions"
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 ## help: Show this help message

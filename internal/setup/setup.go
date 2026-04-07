@@ -67,7 +67,7 @@ type Result struct {
 	Files       int
 }
 
-const claudeCodeMarketplace = "syfra-io/ancora"
+const claudeCodeMarketplace = "Syfra3/ancora"
 
 // claudeCodeMCPTools are the MCP tool names registered by the ancora plugin
 // in Claude Code. Adding these to ~/.claude/settings.json permissions.allow

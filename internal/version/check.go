@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	repoOwner = "syfra-io"
-	repoName  = "syfra"
+	repoOwner = "Syfra3"
+	repoName  = "ancora"
 )
 
 var (

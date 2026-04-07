@@ -38,8 +38,8 @@ func TestExtractRepoName(t *testing.T) {
 		},
 		{
 			name: "SSH org with dots in repo name",
-			url:  "git@github.com:syfra-io/syfra.git",
-			want: "syfra",
+			url:  "git@github.com:Syfra3/ancora.git",
+			want: "ancora",
 		},
 		{
 			name: "HTTPS org with dots",
