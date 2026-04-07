@@ -24,7 +24,7 @@ var loadServerStats = func(s *store.Store) (*store.Stats, error) {
 }
 
 // SyncStatusProvider returns the current sync status. This is implemented
-// by autosync.Manager and injected from cmd/syfra/main.go.
+// by autosync.Manager and injected from cmd/ancora/main.go.
 type SyncStatusProvider interface {
 	Status() SyncStatus
 }

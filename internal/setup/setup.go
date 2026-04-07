@@ -213,9 +213,9 @@ Keep it concise and high-signal.`
 
 // ValidateBinaryInPATH checks whether the ancora binary is accessible in PATH.
 // Returns the resolved absolute path on success, or an error with install instructions.
-// The binary name checked is "syfra" (matching cmd/syfra/).
+// The binary name checked is "ancora" (matching cmd/ancora/).
 func ValidateBinaryInPATH() (string, error) {
-	const binaryName = "syfra"
+	const binaryName = "ancora"
 	path, err := lookPathFn(binaryName)
 	if err != nil {
 		return "", fmt.Errorf(

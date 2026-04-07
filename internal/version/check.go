@@ -150,11 +150,11 @@ func splitVersion(v string) [3]int {
 func updateInstructions() string {
 	switch runtime.GOOS {
 	case "darwin":
-		return "  brew update && brew upgrade syfra"
+		return "  brew update && brew upgrade ancora"
 	case "linux":
-		return "  brew update && brew upgrade syfra\n  or: go install github.com/Syfra3/ancora/cmd/syfra@latest"
+		return "  brew update && brew upgrade ancora\n  or: go install github.com/Syfra3/ancora/cmd/ancora@latest"
 	default:
-		return "  go install github.com/Syfra3/ancora/cmd/syfra@latest\n  or: https://github.com/Syfra3/ancora/releases/latest"
+		return "  go install github.com/Syfra3/ancora/cmd/ancora@latest\n  or: https://github.com/Syfra3/ancora/releases/latest"
 	}
 }
 
