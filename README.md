@@ -524,3 +524,7 @@ For questions or issues, contact: support@ancora.co
 MIT License - See [LICENSE](./LICENSE) file for details.
 
 **Ancora Core** is free and open source software. Premium features (cloud sync, enterprise support) are available separately.
+
+## Acknowledgments
+
+Inspired by [Engram](https://github.com/Gentleman-Programming/engram) for workspace and organization sync architecture.
