@@ -39,12 +39,12 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-// version is set via ldflags at build time by goreleaser.
-// Falls back to "dev" for local builds; init() tries Go module info first.
-var version = "dev"
+// version is set via ldflags at build time by goreleaser or from version.go.
+// Falls back to "dev" for local builds; init() tries Version constant, then Go module info.
+var version = Version
 
 func init() {
-	if version != "dev" {
+	if version != "dev" && version != "" {
 		return
 	}
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
