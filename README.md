@@ -140,10 +140,53 @@ Configure in your AI agent's MCP settings:
 
 ### Setup Agent Integration
 
+**Automated setup (recommended):**
+
 ```bash
-ancora setup              # Interactive wizard
-ancora setup claude-code  # Auto-install for Claude Code
+# Interactive wizard (detects your agent)
+ancora setup
+
+# Or specify agent directly
+ancora setup claude-code  # Auto-install for Claude Code from GitHub
 ancora setup opencode     # Auto-install for OpenCode
+```
+
+**What gets installed:**
+
+- **Claude Code**: Plugin via marketplace (GitHub), MCP config, SessionStart hooks, compaction recovery, session tracking
+- **OpenCode**: Plugin at `~/.config/opencode/plugins/ancora.ts`, MCP registration, session hooks
+
+**Local development setup for Claude Code:**
+
+If you're working from the source repository or want to use a local version:
+
+```bash
+# Clone repository
+git clone https://github.com/Syfra3/ancora.git
+cd ancora
+
+# Run local setup script
+./scripts/setup-claude.sh
+```
+
+This installs the plugin from your local directory instead of GitHub, useful for:
+- Testing changes before release
+- Contributing to ancora development
+- Using unreleased features
+
+**Manual Claude Code setup:**
+
+```bash
+# From GitHub (production)
+claude plugin marketplace add Syfra3/ancora
+claude plugin install ancora
+
+# From local directory (development)
+claude plugin marketplace add /path/to/ancora
+claude plugin install ancora
+
+# Both approaches also need MCP:
+claude mcp add ancora ancora -- mcp --tools=agent
 ```
 
 ### Basic CLI Usage
