@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ancora": {
+      "command": "ancora",
+      "args": ["mcp", "--tools=agent"]
+    }
+  }
+}

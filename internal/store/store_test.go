@@ -1,0 +1,5978 @@
+package store
+
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+func mustDefaultConfig(t *testing.T) Config {
+	t.Helper()
+	cfg, err := DefaultConfig()
+	if err != nil {
+		t.Fatalf("DefaultConfig: %v", err)
+	}
+	return cfg
+}
+
+func newTestStore(t *testing.T) *Store {
+	t.Helper()
+	cfg := mustDefaultConfig(t)
+	cfg.DataDir = t.TempDir()
+	cfg.DedupeWindow = time.Hour
+
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.Close()
+	})
+	return s
+}
+
+type fakeRows struct {
+	next    []bool
+	scanErr error
+	err     error
+}
+
+func (f *fakeRows) Next() bool {
+	if len(f.next) == 0 {
+		return false
+	}
+	v := f.next[0]
+	f.next = f.next[1:]
+	return v
+}
+
+func (f *fakeRows) Scan(dest ...any) error {
+	return f.scanErr
+}
+
+func (f *fakeRows) Err() error {
+	return f.err
+}
+
+func (f *fakeRows) Close() error {
+	return nil
+}
+
+func TestAddObservationDeduplicatesWithinWindow(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	firstID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "Fixed tokenizer",
+		Content:    "Normalized tokenizer panic on edge case",
+		Workspace:  "ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add first observation: %v", err)
+	}
+
+	secondID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "Fixed tokenizer",
+		Content:    "normalized   tokenizer panic on EDGE case",
+		Workspace:  "ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add duplicate observation: %v", err)
+	}
+
+	if firstID != secondID {
+		t.Fatalf("expected duplicate to reuse same id, got %d and %d", firstID, secondID)
+	}
+
+	obs, err := s.GetObservation(firstID)
+	if err != nil {
+		t.Fatalf("get deduped observation: %v", err)
+	}
+	if obs.DuplicateCount != 2 {
+		t.Fatalf("expected duplicate_count=2, got %d", obs.DuplicateCount)
+	}
+}
+
+func TestScopeFiltersSearchAndContext(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "Project auth",
+		Content:    "Keep auth middleware in project memory",
+		Workspace:  "ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add project observation: %v", err)
+	}
+
+	_, err = s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "Personal note",
+		Content:    "Use this regex trick later",
+		Workspace:  "ancora",
+		Visibility: "personal",
+	})
+	if err != nil {
+		t.Fatalf("add personal observation: %v", err)
+	}
+
+	projectResults, err := s.Search("regex", SearchOptions{Workspace: "ancora", Visibility: "project", Limit: 10})
+	if err != nil {
+		t.Fatalf("search project scope: %v", err)
+	}
+	if len(projectResults) != 0 {
+		t.Fatalf("expected no project-scope regex results, got %d", len(projectResults))
+	}
+
+	personalResults, err := s.Search("regex", SearchOptions{Workspace: "ancora", Visibility: "personal", Limit: 10})
+	if err != nil {
+		t.Fatalf("search personal scope: %v", err)
+	}
+	if len(personalResults) != 1 {
+		t.Fatalf("expected 1 personal-scope result, got %d", len(personalResults))
+	}
+
+	ctx, err := s.FormatContext("ancora", "personal")
+	if err != nil {
+		t.Fatalf("format context personal: %v", err)
+	}
+	if !strings.Contains(ctx, "Personal note") {
+		t.Fatalf("expected personal context to include personal observation")
+	}
+	if strings.Contains(ctx, "Project auth") {
+		t.Fatalf("expected personal context to exclude project observation")
+	}
+}
+
+func TestUpdateAndSoftDeleteExcludedFromSearchAndTimeline(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	firstID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "first",
+		Content:    "first event",
+		Workspace:  "ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add first: %v", err)
+	}
+
+	middleID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "middle",
+		Content:    "to be deleted",
+		Workspace:  "ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add middle: %v", err)
+	}
+
+	lastID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "last",
+		Content:    "last event",
+		Workspace:  "ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add last: %v", err)
+	}
+
+	newTitle := "last-updated"
+	newContent := "updated content"
+	newScope := "personal"
+	updated, err := s.UpdateObservation(lastID, UpdateObservationParams{
+		Title:      &newTitle,
+		Content:    &newContent,
+		Visibility: &newScope,
+	})
+	if err != nil {
+		t.Fatalf("update observation: %v", err)
+	}
+	if updated.Title != newTitle || updated.Visibility != "personal" {
+		t.Fatalf("update did not apply; got title=%q scope=%q", updated.Title, updated.Visibility)
+	}
+
+	if err := s.DeleteObservation(middleID, false); err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+
+	if _, err := s.GetObservation(middleID); err == nil {
+		t.Fatalf("expected deleted observation to be hidden from GetObservation")
+	}
+
+	searchResults, err := s.Search("deleted", SearchOptions{Workspace: "ancora", Limit: 10})
+	if err != nil {
+		t.Fatalf("search after delete: %v", err)
+	}
+	if len(searchResults) != 0 {
+		t.Fatalf("expected deleted observation excluded from search")
+	}
+
+	timeline, err := s.Timeline(firstID, 5, 5)
+	if err != nil {
+		t.Fatalf("timeline: %v", err)
+	}
+	if len(timeline.After) != 1 || timeline.After[0].ID != lastID {
+		t.Fatalf("expected timeline to skip deleted observation")
+	}
+
+	if err := s.DeleteObservation(lastID, true); err != nil {
+		t.Fatalf("hard delete: %v", err)
+	}
+	if _, err := s.GetObservation(lastID); err == nil {
+		t.Fatalf("expected hard-deleted observation to be missing")
+	}
+}
+
+func TestTopicKeyUpsertUpdatesSameTopicWithoutCreatingNewRow(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	firstID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "architecture",
+		Title:      "Auth architecture",
+		Content:    "Use middleware for JWT validation.",
+		Workspace:  "ancora",
+		Visibility: "project",
+		TopicKey:   "architecture auth model",
+	})
+	if err != nil {
+		t.Fatalf("add first architecture: %v", err)
+	}
+
+	secondID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "architecture",
+		Title:      "Auth architecture",
+		Content:    "Move auth to gateway + middleware chain.",
+		Workspace:  "ancora",
+		Visibility: "project",
+		TopicKey:   "ARCHITECTURE   AUTH  MODEL",
+	})
+	if err != nil {
+		t.Fatalf("upsert architecture: %v", err)
+	}
+
+	if firstID != secondID {
+		t.Fatalf("expected topic upsert to reuse id, got %d and %d", firstID, secondID)
+	}
+
+	obs, err := s.GetObservation(firstID)
+	if err != nil {
+		t.Fatalf("get upserted observation: %v", err)
+	}
+	if obs.RevisionCount != 2 {
+		t.Fatalf("expected revision_count=2, got %d", obs.RevisionCount)
+	}
+	if obs.TopicKey == nil || *obs.TopicKey != "architecture-auth-model" {
+		t.Fatalf("expected normalized topic key, got %v", obs.TopicKey)
+	}
+	if !strings.Contains(obs.Content, "gateway") {
+		t.Fatalf("expected latest content after upsert, got %q", obs.Content)
+	}
+}
+
+func TestDifferentTopicsDoNotReplaceEachOther(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	archID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "architecture",
+		Title:      "Auth architecture",
+		Content:    "Architecture decision",
+		Workspace:  "ancora",
+		Visibility: "project",
+		TopicKey:   "architecture/auth",
+	})
+	if err != nil {
+		t.Fatalf("add architecture observation: %v", err)
+	}
+
+	bugID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "Fix auth nil panic",
+		Content:    "Bugfix details",
+		Workspace:  "ancora",
+		Visibility: "project",
+		TopicKey:   "bug/auth-nil-panic",
+	})
+	if err != nil {
+		t.Fatalf("add bug observation: %v", err)
+	}
+
+	if archID == bugID {
+		t.Fatalf("expected different topic keys to create different observations")
+	}
+
+	observations, err := s.AllObservations("ancora", "project", 10)
+	if err != nil {
+		t.Fatalf("all observations: %v", err)
+	}
+	if len(observations) != 2 {
+		t.Fatalf("expected 2 observations, got %d", len(observations))
+	}
+}
+
+func TestNewMigratesLegacyObservationIDSchema(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "ancora.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			project TEXT NOT NULL,
+			directory TEXT NOT NULL,
+			started_at TEXT NOT NULL DEFAULT (datetime('now')),
+			ended_at TEXT,
+			summary TEXT
+		);
+		CREATE TABLE observations (
+			id INT,
+			session_id TEXT,
+			type TEXT,
+			title TEXT,
+			content TEXT,
+			tool_name TEXT,
+			project TEXT,
+			scope TEXT,
+			created_at TEXT
+		);
+		INSERT INTO sessions (id, project, directory) VALUES ('s1', 'ancora', '/tmp/ancora');
+		INSERT INTO observations (id, session_id, type, title, content, project, created_at)
+		VALUES
+			(NULL, 's1', 'bugfix', 'legacy null', 'legacy null content', 'ancora', datetime('now')),
+			(7, 's1', 'bugfix', 'legacy fixed', 'legacy fixed content', 'ancora', datetime('now')),
+			(7, 's1', 'bugfix', 'legacy duplicate', 'legacy duplicate content', 'ancora', datetime('now'));
+	`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("seed legacy db: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	cfg := mustDefaultConfig(t)
+	cfg.DataDir = dataDir
+
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new store after legacy schema: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	obs, err := s.AllObservations("ancora", "", 20)
+	if err != nil {
+		t.Fatalf("all observations after migration: %v", err)
+	}
+	if len(obs) != 3 {
+		t.Fatalf("expected 3 migrated observations, got %d", len(obs))
+	}
+
+	seen := make(map[int64]bool)
+	for _, o := range obs {
+		if o.ID <= 0 {
+			t.Fatalf("expected migrated observation id > 0, got %d", o.ID)
+		}
+		if seen[o.ID] {
+			t.Fatalf("expected unique migrated ids, duplicate %d", o.ID)
+		}
+		seen[o.ID] = true
+	}
+
+	results, err := s.Search("legacy", SearchOptions{Workspace: "ancora", Limit: 10})
+	if err != nil {
+		t.Fatalf("search after migration: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatalf("expected search results after migration")
+	}
+
+	newID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "post migration",
+		Content:    "new row should get id",
+		Workspace:  "ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add observation after migration: %v", err)
+	}
+	if newID <= 0 {
+		t.Fatalf("expected autoincrement id after migration, got %d", newID)
+	}
+}
+
+func TestNewMigratesLegacyUserPromptsSyncIDSchema(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "ancora.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			project TEXT NOT NULL,
+			directory TEXT NOT NULL,
+			started_at TEXT NOT NULL DEFAULT (datetime('now')),
+			ended_at TEXT,
+			summary TEXT
+		);
+		CREATE TABLE user_prompts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			content TEXT NOT NULL,
+			project TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (session_id) REFERENCES sessions(id)
+		);
+		INSERT INTO sessions (id, project, directory) VALUES ('s1', 'ancora', '/tmp/ancora');
+		INSERT INTO user_prompts (session_id, content, project) VALUES ('s1', 'legacy prompt', 'ancora');
+	`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("seed legacy db: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	cfg := mustDefaultConfig(t)
+	cfg.DataDir = dataDir
+
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new store after legacy prompt schema: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	var syncID string
+	if err := s.db.QueryRow("SELECT sync_id FROM user_prompts WHERE content = ?", "legacy prompt").Scan(&syncID); err != nil {
+		t.Fatalf("query migrated prompt sync_id: %v", err)
+	}
+	if syncID == "" {
+		t.Fatalf("expected migrated prompt sync_id to be backfilled")
+	}
+
+	var hasSyncIDColumn bool
+	rows, err := s.db.Query("PRAGMA table_info(user_prompts)")
+	if err != nil {
+		t.Fatalf("query prompt columns: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatalf("scan prompt column: %v", err)
+		}
+		if name == "sync_id" {
+			hasSyncIDColumn = true
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate prompt columns: %v", err)
+	}
+	if !hasSyncIDColumn {
+		t.Fatalf("expected user_prompts.sync_id column after migration")
+	}
+
+	var indexName string
+	if err := s.db.QueryRow("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_prompts_sync_id'").Scan(&indexName); err != nil {
+		t.Fatalf("query prompt sync index: %v", err)
+	}
+	if indexName != "idx_prompts_sync_id" {
+		t.Fatalf("expected idx_prompts_sync_id to exist, got %q", indexName)
+	}
+}
+
+func TestSuggestTopicKeyNormalizesDeterministically(t *testing.T) {
+	got := SuggestTopicKey("Architecture", "  Auth Model  ", "ignored")
+	if got != "architecture/auth-model" {
+		t.Fatalf("expected architecture/auth-model, got %q", got)
+	}
+
+	fallback := SuggestTopicKey("bugfix", "", "Fix nil panic in auth middleware on empty token")
+	if fallback != "bug/fix-nil-panic-in-auth-middleware-on-empty" {
+		t.Fatalf("unexpected fallback topic key: %q", fallback)
+	}
+}
+
+func TestSuggestTopicKeyInfersFamilyFromTextWhenTypeIsGeneric(t *testing.T) {
+	bug := SuggestTopicKey("manual", "", "Fix regression in auth login flow")
+	if bug != "bug/fix-regression-in-auth-login-flow" {
+		t.Fatalf("expected bug family inference, got %q", bug)
+	}
+
+	arch := SuggestTopicKey("", "ADR: Split API gateway boundary", "")
+	if arch != "architecture/adr-split-api-gateway-boundary" {
+		t.Fatalf("expected architecture family inference, got %q", arch)
+	}
+}
+
+func TestTopicKeyUpsertIsScopedByProjectAndScope(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	baseID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "architecture",
+		Title:      "Auth model",
+		Content:    "Initial architecture",
+		Workspace:  "ancora",
+		Visibility: "project",
+		TopicKey:   "architecture/auth-model",
+	})
+	if err != nil {
+		t.Fatalf("add base observation: %v", err)
+	}
+
+	personalID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "architecture",
+		Title:      "Auth model",
+		Content:    "Personal take",
+		Workspace:  "ancora",
+		Visibility: "personal",
+		TopicKey:   "architecture/auth-model",
+	})
+	if err != nil {
+		t.Fatalf("add personal scoped observation: %v", err)
+	}
+
+	otherProjectID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "architecture",
+		Title:      "Auth model",
+		Content:    "Other project",
+		Workspace:  "another-project",
+		Visibility: "project",
+		TopicKey:   "architecture/auth-model",
+	})
+	if err != nil {
+		t.Fatalf("add other project observation: %v", err)
+	}
+
+	if baseID == personalID || baseID == otherProjectID || personalID == otherProjectID {
+		t.Fatalf("expected topic upsert boundaries by project+scope, got ids base=%d personal=%d other=%d", baseID, personalID, otherProjectID)
+	}
+}
+
+func TestPromptProjectNullScan(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Manually insert a prompt with NULL project to simulate legacy data or external changes
+	_, err := s.db.Exec(
+		"INSERT INTO user_prompts (session_id, content, project) VALUES (?, ?, NULL)",
+		"s1", "prompt with null project",
+	)
+	if err != nil {
+		t.Fatalf("manual insert: %v", err)
+	}
+
+	// 1. Test RecentPrompts
+	prompts, err := s.RecentPrompts("", 10)
+	if err != nil {
+		t.Fatalf("RecentPrompts failed with null project: %v", err)
+	}
+	if len(prompts) != 1 || prompts[0].Project != "" {
+		t.Errorf("expected empty string for null project, got %q", prompts[0].Project)
+	}
+
+	// 2. Test SearchPrompts
+	searchResult, err := s.SearchPrompts("null", "", 10)
+	if err != nil {
+		t.Fatalf("SearchPrompts failed with null project: %v", err)
+	}
+	if len(searchResult) != 1 || searchResult[0].Project != "" {
+		t.Errorf("expected empty string for null project in search, got %q", searchResult[0].Project)
+	}
+
+	// 3. Test Export
+	data, err := s.Export()
+	if err != nil {
+		t.Fatalf("Export failed with null project: %v", err)
+	}
+	found := false
+	for _, p := range data.Prompts {
+		if p.Content == "prompt with null project" {
+			found = true
+			if p.Project != "" {
+				t.Errorf("expected empty string for null project in export, got %q", p.Project)
+			}
+		}
+	}
+	if !found {
+		t.Error("exported prompts missing the test prompt")
+	}
+}
+
+// ─── Passive Capture Tests ───────────────────────────────────────────────────
+
+func TestExtractLearningsNumberedList(t *testing.T) {
+	text := `Some preamble text here.
+
+## Key Learnings:
+
+1. bcrypt cost=12 is the right balance for our server performance
+2. JWT refresh tokens need atomic rotation to prevent race conditions
+3. Always validate the audience claim in JWT tokens before trusting them
+
+## Next Steps
+- something else
+`
+	learnings := ExtractLearnings(text)
+	if len(learnings) != 3 {
+		t.Fatalf("expected 3 learnings, got %d: %v", len(learnings), learnings)
+	}
+	if !strings.Contains(learnings[0], "bcrypt") {
+		t.Fatalf("expected first learning about bcrypt, got %q", learnings[0])
+	}
+}
+
+func TestExtractLearningsSpanishHeader(t *testing.T) {
+	text := `## Aprendizajes Clave:
+
+1. El costo de bcrypt=12 es el balance correcto para nuestro servidor
+2. Los refresh tokens de JWT necesitan rotacion atomica
+`
+	learnings := ExtractLearnings(text)
+	if len(learnings) != 2 {
+		t.Fatalf("expected 2 learnings, got %d: %v", len(learnings), learnings)
+	}
+}
+
+func TestExtractLearningsBulletList(t *testing.T) {
+	text := `### Learnings:
+
+- bcrypt cost=12 is the right balance for our server performance
+- JWT refresh tokens need atomic rotation to prevent race conditions
+`
+	learnings := ExtractLearnings(text)
+	if len(learnings) != 2 {
+		t.Fatalf("expected 2 learnings, got %d: %v", len(learnings), learnings)
+	}
+}
+
+func TestExtractLearningsIgnoresShortItems(t *testing.T) {
+	text := `## Key Learnings:
+
+1. too short
+2. bcrypt cost=12 is the right balance for our server performance
+3. also short
+`
+	learnings := ExtractLearnings(text)
+	if len(learnings) != 1 {
+		t.Fatalf("expected 1 learning (short ones filtered), got %d: %v", len(learnings), learnings)
+	}
+}
+
+func TestExtractLearningsNoSection(t *testing.T) {
+	text := `This is just regular text without any learning section headers.
+It has multiple lines but no ## Key Learnings or similar.
+`
+	learnings := ExtractLearnings(text)
+	if len(learnings) != 0 {
+		t.Fatalf("expected 0 learnings, got %d: %v", len(learnings), learnings)
+	}
+}
+
+func TestExtractLearningsSectionPresentButNoValidItems(t *testing.T) {
+	text := `## Key Learnings:
+
+1. short
+2. tiny
+`
+	learnings := ExtractLearnings(text)
+	if len(learnings) != 0 {
+		t.Fatalf("expected 0 learnings when section has no valid items, got %d: %v", len(learnings), learnings)
+	}
+}
+
+func TestExtractLearningsUsesLastSection(t *testing.T) {
+	text := `## Key Learnings:
+
+1. This is from the first section and should be ignored
+
+Some other text here.
+
+## Key Learnings:
+
+1. This is from the last section and should be captured as the real one
+`
+	learnings := ExtractLearnings(text)
+	if len(learnings) != 1 {
+		t.Fatalf("expected 1 learning from last section, got %d: %v", len(learnings), learnings)
+	}
+	if !strings.Contains(learnings[0], "last section") {
+		t.Fatalf("expected learning from last section, got %q", learnings[0])
+	}
+}
+
+func TestExtractLearningsFallsBackWhenLastSectionHasNoValidItems(t *testing.T) {
+	text := `## Key Learnings:
+
+1. This is long enough and should be captured from the previous section
+
+## Key Learnings:
+
+1. short
+2. tiny
+`
+	learnings := ExtractLearnings(text)
+	if len(learnings) != 1 {
+		t.Fatalf("expected fallback to previous valid section, got %d: %v", len(learnings), learnings)
+	}
+	if !strings.Contains(learnings[0], "previous section") {
+		t.Fatalf("expected learning from previous section, got %q", learnings[0])
+	}
+}
+
+func TestExtractLearningsCleansMarkdown(t *testing.T) {
+	text := "## Key Learnings:\n\n1. **Use** `context.Context` in *all* handlers to support cancellation correctly\n"
+	learnings := ExtractLearnings(text)
+	if len(learnings) != 1 {
+		t.Fatalf("expected 1 learning, got %d: %v", len(learnings), learnings)
+	}
+	if strings.Contains(learnings[0], "**") || strings.Contains(learnings[0], "`") || strings.Contains(learnings[0], "*") {
+		t.Fatalf("expected markdown to be stripped, got %q", learnings[0])
+	}
+}
+
+func TestPassiveCaptureStoresLearnings(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	text := `## Key Learnings:
+
+1. bcrypt cost=12 is the right balance for our server performance
+2. JWT refresh tokens need atomic rotation to prevent race conditions
+`
+	result, err := s.PassiveCapture(PassiveCaptureParams{
+		SessionID: "s1",
+		Content:   text,
+		Project:   "ancora",
+		Source:    "test",
+	})
+	if err != nil {
+		t.Fatalf("passive capture: %v", err)
+	}
+	if result.Extracted != 2 {
+		t.Fatalf("expected 2 extracted, got %d", result.Extracted)
+	}
+	if result.Saved != 2 {
+		t.Fatalf("expected 2 saved, got %d", result.Saved)
+	}
+
+	obs, err := s.AllObservations("ancora", "", 10)
+	if err != nil {
+		t.Fatalf("all observations: %v", err)
+	}
+	if len(obs) != 2 {
+		t.Fatalf("expected 2 observations, got %d", len(obs))
+	}
+	for _, o := range obs {
+		if o.Type != "passive" {
+			t.Fatalf("expected type=passive, got %q", o.Type)
+		}
+	}
+	if obs[0].ToolName == nil || *obs[0].ToolName != "test" {
+		t.Fatalf("expected tool_name source to be stored as 'test', got %+v", obs[0].ToolName)
+	}
+}
+
+func TestPassiveCaptureEmptyContent(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	result, err := s.PassiveCapture(PassiveCaptureParams{
+		SessionID: "s1",
+		Content:   "",
+		Project:   "ancora",
+		Source:    "test",
+	})
+	if err != nil {
+		t.Fatalf("passive capture: %v", err)
+	}
+	if result.Extracted != 0 || result.Saved != 0 {
+		t.Fatalf("expected 0 extracted and 0 saved, got %d/%d", result.Extracted, result.Saved)
+	}
+}
+
+func TestPassiveCaptureDedupesAgainstExistingObservations(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// First: agent saves actively via mem_save
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "bcrypt cost",
+		Content:    "bcrypt cost=12 is the right balance for our server performance",
+		Workspace:  "ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add active observation: %v", err)
+	}
+
+	// Then: passive capture fires with overlapping content
+	text := `## Key Learnings:
+
+1. bcrypt cost=12 is the right balance for our server performance
+2. JWT refresh tokens need atomic rotation to prevent race conditions
+`
+	result, err := s.PassiveCapture(PassiveCaptureParams{
+		SessionID: "s1",
+		Content:   text,
+		Project:   "ancora",
+		Source:    "test",
+	})
+	if err != nil {
+		t.Fatalf("passive capture: %v", err)
+	}
+	if result.Extracted != 2 {
+		t.Fatalf("expected 2 extracted, got %d", result.Extracted)
+	}
+	if result.Saved != 1 {
+		t.Fatalf("expected 1 saved (1 deduped), got %d", result.Saved)
+	}
+	if result.Duplicates != 1 {
+		t.Fatalf("expected 1 duplicate, got %d", result.Duplicates)
+	}
+}
+
+func TestPassiveCaptureReturnsErrorWhenSessionDoesNotExist(t *testing.T) {
+	s := newTestStore(t)
+
+	text := `## Key Learnings:
+
+1. This learning is long enough to attempt insert and fail without session
+`
+	_, err := s.PassiveCapture(PassiveCaptureParams{
+		SessionID: "missing-session",
+		Content:   text,
+		Project:   "ancora",
+		Source:    "test",
+	})
+	if err == nil {
+		t.Fatalf("expected error when session does not exist")
+	}
+}
+
+func TestStatsProjectsOrderedByMostRecentObservation(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session s1: %v", err)
+	}
+	if err := s.CreateSession("s2", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session s2: %v", err)
+	}
+
+	_, err := s.db.Exec(
+		`INSERT INTO observations (session_id, type, title, content, workspace, visibility, normalized_hash, revision_count, duplicate_count, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?),
+		        (?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)`,
+		"s1", "note", "older", "older alpha", "alpha", "project", hashNormalized("older alpha"), "2026-02-01 10:00:00", "2026-02-01 10:00:00",
+		"s2", "note", "newer", "newer beta", "beta", "project", hashNormalized("newer beta"), "2026-02-02 10:00:00", "2026-02-02 10:00:00",
+	)
+	if err != nil {
+		t.Fatalf("insert observations: %v", err)
+	}
+
+	stats, err := s.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if len(stats.Projects) < 2 {
+		t.Fatalf("expected at least 2 projects, got %d", len(stats.Projects))
+	}
+
+	if stats.Projects[0] != "beta" || stats.Projects[1] != "alpha" {
+		t.Fatalf("expected recency order [beta alpha], got %v", stats.Projects[:2])
+	}
+}
+
+func TestSessionsOrderedByMostRecentActivity(t *testing.T) {
+	s := newTestStore(t)
+
+	_, err := s.db.Exec(
+		`INSERT INTO sessions (id, project, directory, started_at) VALUES
+		 (?, ?, ?, ?),
+		 (?, ?, ?, ?)`,
+		"s-older", "ancora", "/tmp/ancora", "2026-02-01 09:00:00",
+		"s-newer", "ancora", "/tmp/ancora", "2026-02-02 09:00:00",
+	)
+	if err != nil {
+		t.Fatalf("insert sessions: %v", err)
+	}
+
+	_, err = s.db.Exec(
+		`INSERT INTO observations (session_id, type, title, content, project, scope, normalized_hash, revision_count, duplicate_count, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)`,
+		"s-older", "note", "latest", "session old got new activity", "ancora", "project", hashNormalized("session old got new activity"), "2026-02-03 09:00:00", "2026-02-03 09:00:00",
+	)
+	if err != nil {
+		t.Fatalf("insert latest observation: %v", err)
+	}
+
+	all, err := s.AllSessions("", 10)
+	if err != nil {
+		t.Fatalf("all sessions: %v", err)
+	}
+	if len(all) < 2 {
+		t.Fatalf("expected at least 2 sessions, got %d", len(all))
+	}
+	if all[0].ID != "s-older" {
+		t.Fatalf("expected s-older first in all sessions, got %s", all[0].ID)
+	}
+
+	recent, err := s.RecentSessions("", 10)
+	if err != nil {
+		t.Fatalf("recent sessions: %v", err)
+	}
+	if len(recent) < 2 {
+		t.Fatalf("expected at least 2 recent sessions, got %d", len(recent))
+	}
+	if recent[0].ID != "s-older" {
+		t.Fatalf("expected s-older first in recent sessions, got %s", recent[0].ID)
+	}
+}
+
+func TestSessionObservationsAddPromptImportAndSyncChunks(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "Auth",
+		Content:    "Use middleware chain",
+		Workspace:  "ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	// 	longPrompt := strings.Repeat("x", s.cfg.MaxObservationLength+25)
+	promptID, err := s.AddPrompt(AddPromptParams{SessionID: "s1", Content: "test", Project: "ancora"})
+	if err != nil {
+		t.Fatalf("add prompt: %v", err)
+	}
+	if promptID <= 0 {
+		t.Fatalf("expected valid prompt id, got %d", promptID)
+	}
+
+	sessionObs, err := s.SessionObservations("s1", 0)
+	if err != nil {
+		t.Fatalf("session observations: %v", err)
+	}
+	if len(sessionObs) != 1 {
+		t.Fatalf("expected 1 session observation, got %d", len(sessionObs))
+	}
+
+	exported, err := s.Export()
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	cfg := mustDefaultConfig(t)
+	cfg.DataDir = t.TempDir()
+	dst, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new destination store: %v", err)
+	}
+	t.Cleanup(func() { _ = dst.Close() })
+
+	imported, err := dst.Import(exported)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if imported.SessionsImported < 1 || imported.ObservationsImported < 1 || imported.PromptsImported < 1 {
+		t.Fatalf("expected non-zero import counts, got %+v", imported)
+	}
+
+	if err := dst.RecordSyncedChunk("chunk-1"); err != nil {
+		t.Fatalf("record synced chunk: %v", err)
+	}
+	chunks, err := dst.GetSyncedChunks()
+	if err != nil {
+		t.Fatalf("get synced chunks: %v", err)
+	}
+	if !chunks["chunk-1"] {
+		t.Fatalf("expected chunk-1 to be marked as synced")
+	}
+}
+
+func TestStoreLocalSyncFoundationEnqueuesCoreMutations(t *testing.T) {
+	s := newTestStore(t)
+
+	// Enroll "ancora" so mutations are visible via ListPendingSyncMutations.
+	if err := s.EnrollProject("ancora"); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+
+	if err := s.CreateSession("sync-session", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	obsID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "sync-session",
+		Type:       "decision",
+		Title:      "Initial title",
+		Content:    "Initial content",
+		Workspace:  "ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	updatedTitle := "Updated title"
+	updatedContent := "Updated content"
+	if _, err := s.UpdateObservation(obsID, UpdateObservationParams{
+		Title:   &updatedTitle,
+		Content: &updatedContent,
+	}); err != nil {
+		t.Fatalf("update observation: %v", err)
+	}
+
+	if err := s.DeleteObservation(obsID, false); err != nil {
+		t.Fatalf("soft delete observation: %v", err)
+	}
+
+	promptID, err := s.AddPrompt(AddPromptParams{
+		SessionID: "sync-session",
+		Content:   "How do we keep this local-first?",
+		Project:   "ancora",
+	})
+	if err != nil {
+		t.Fatalf("add prompt: %v", err)
+	}
+
+	if err := s.EndSession("sync-session", "done"); err != nil {
+		t.Fatalf("end session: %v", err)
+	}
+
+	state, err := s.GetSyncState(DefaultSyncTargetKey)
+	if err != nil {
+		t.Fatalf("get sync state: %v", err)
+	}
+	if state.TargetKey != DefaultSyncTargetKey {
+		t.Fatalf("expected target %q, got %q", DefaultSyncTargetKey, state.TargetKey)
+	}
+	if state.Lifecycle != SyncLifecyclePending {
+		t.Fatalf("expected pending lifecycle after local writes, got %q", state.Lifecycle)
+	}
+	if state.LastEnqueuedSeq != 6 {
+		t.Fatalf("expected 6 enqueued mutations, got %d", state.LastEnqueuedSeq)
+	}
+
+	mutations, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 10)
+	if err != nil {
+		t.Fatalf("list pending sync mutations: %v", err)
+	}
+	if len(mutations) != 6 {
+		t.Fatalf("expected 6 pending mutations, got %d", len(mutations))
+	}
+
+	var observationSyncID string
+	if err := s.db.QueryRow("SELECT sync_id FROM observations WHERE id = ?", obsID).Scan(&observationSyncID); err != nil {
+		t.Fatalf("lookup observation sync id: %v", err)
+	}
+	if observationSyncID == "" {
+		t.Fatalf("expected observation sync id to be persisted")
+	}
+
+	var promptSyncID string
+	if err := s.db.QueryRow("SELECT sync_id FROM user_prompts WHERE id = ?", promptID).Scan(&promptSyncID); err != nil {
+		t.Fatalf("lookup prompt sync id: %v", err)
+	}
+	if promptSyncID == "" {
+		t.Fatalf("expected prompt sync id to be persisted")
+	}
+
+	if mutations[0].Entity != SyncEntitySession || mutations[0].EntityKey != "sync-session" || mutations[0].Op != SyncOpUpsert {
+		t.Fatalf("unexpected session mutation: %+v", mutations[0])
+	}
+	if mutations[1].Entity != SyncEntityObservation || mutations[1].EntityKey != observationSyncID || mutations[1].Op != SyncOpUpsert {
+		t.Fatalf("unexpected observation insert mutation: %+v", mutations[1])
+	}
+	if mutations[2].Entity != SyncEntityObservation || mutations[2].EntityKey != observationSyncID || mutations[2].Op != SyncOpUpsert {
+		t.Fatalf("unexpected observation update mutation: %+v", mutations[2])
+	}
+	if mutations[3].Entity != SyncEntityObservation || mutations[3].EntityKey != observationSyncID || mutations[3].Op != SyncOpDelete {
+		t.Fatalf("unexpected observation delete mutation: %+v", mutations[3])
+	}
+	if mutations[4].Entity != SyncEntityPrompt || mutations[4].EntityKey != promptSyncID || mutations[4].Op != SyncOpUpsert {
+		t.Fatalf("unexpected prompt mutation: %+v", mutations[4])
+	}
+	if mutations[5].Entity != SyncEntitySession || mutations[5].EntityKey != "sync-session" || mutations[5].Op != SyncOpUpsert {
+		t.Fatalf("unexpected end session mutation: %+v", mutations[5])
+	}
+
+	var deletedPayload map[string]any
+	if err := json.Unmarshal([]byte(mutations[3].Payload), &deletedPayload); err != nil {
+		t.Fatalf("decode delete payload: %v", err)
+	}
+	if deletedPayload["sync_id"] != observationSyncID {
+		t.Fatalf("expected delete payload sync id %q, got %#v", observationSyncID, deletedPayload["sync_id"])
+	}
+	if deletedPayload["deleted"] != true {
+		t.Fatalf("expected delete payload to mark deleted=true, got %#v", deletedPayload["deleted"])
+	}
+
+	if err := s.AckSyncMutations(DefaultSyncTargetKey, mutations[3].Seq); err != nil {
+		t.Fatalf("ack sync mutations: %v", err)
+	}
+	remaining, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 10)
+	if err != nil {
+		t.Fatalf("list remaining sync mutations: %v", err)
+	}
+	if len(remaining) != 2 || remaining[0].Entity != SyncEntityPrompt || remaining[1].Entity != SyncEntitySession {
+		t.Fatalf("expected prompt and end-session mutations to remain pending, got %+v", remaining)
+	}
+}
+
+func TestStoreLocalSyncFoundationStateHelpers(t *testing.T) {
+	s := newTestStore(t)
+
+	state, err := s.GetSyncState(DefaultSyncTargetKey)
+	if err != nil {
+		t.Fatalf("get initial sync state: %v", err)
+	}
+	if state.Lifecycle != SyncLifecycleIdle {
+		t.Fatalf("expected idle lifecycle, got %q", state.Lifecycle)
+	}
+
+	acquired, err := s.AcquireSyncLease(DefaultSyncTargetKey, "worker-a", 2*time.Minute, time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("acquire first lease: %v", err)
+	}
+	if !acquired {
+		t.Fatalf("expected first lease acquisition to succeed")
+	}
+
+	acquired, err = s.AcquireSyncLease(DefaultSyncTargetKey, "worker-b", 2*time.Minute, time.Date(2026, 3, 7, 12, 1, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("acquire conflicting lease: %v", err)
+	}
+	if acquired {
+		t.Fatalf("expected conflicting lease acquisition to fail")
+	}
+
+	if err := s.ReleaseSyncLease(DefaultSyncTargetKey, "worker-a"); err != nil {
+		t.Fatalf("release lease: %v", err)
+	}
+
+	acquired, err = s.AcquireSyncLease(DefaultSyncTargetKey, "worker-b", 2*time.Minute, time.Date(2026, 3, 7, 12, 2, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("acquire released lease: %v", err)
+	}
+	if !acquired {
+		t.Fatalf("expected lease acquisition after release to succeed")
+	}
+
+	if err := s.MarkSyncFailure(DefaultSyncTargetKey, "timeout talking to cloud", time.Date(2026, 3, 7, 12, 10, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("mark sync failure: %v", err)
+	}
+
+	state, err = s.GetSyncState(DefaultSyncTargetKey)
+	if err != nil {
+		t.Fatalf("get degraded sync state: %v", err)
+	}
+	if state.Lifecycle != SyncLifecycleDegraded {
+		t.Fatalf("expected degraded lifecycle, got %q", state.Lifecycle)
+	}
+	if state.ConsecutiveFailures != 1 {
+		t.Fatalf("expected failure count 1, got %d", state.ConsecutiveFailures)
+	}
+	if state.LastError == nil || *state.LastError != "timeout talking to cloud" {
+		t.Fatalf("expected last error to be stored, got %+v", state.LastError)
+	}
+	if state.BackoffUntil == nil || *state.BackoffUntil != "2026-03-07T12:10:00Z" {
+		t.Fatalf("expected backoff timestamp to be stored, got %+v", state.BackoffUntil)
+	}
+
+	if err := s.MarkSyncHealthy(DefaultSyncTargetKey); err != nil {
+		t.Fatalf("mark sync healthy: %v", err)
+	}
+
+	state, err = s.GetSyncState(DefaultSyncTargetKey)
+	if err != nil {
+		t.Fatalf("get healthy sync state: %v", err)
+	}
+	if state.Lifecycle != SyncLifecycleHealthy {
+		t.Fatalf("expected healthy lifecycle, got %q", state.Lifecycle)
+	}
+	if state.ConsecutiveFailures != 0 || state.LastError != nil || state.BackoffUntil != nil {
+		t.Fatalf("expected healthy state to clear failure metadata, got %+v", state)
+	}
+}
+
+func TestApplyRemoteMutationIdempotent(t *testing.T) {
+	s := newTestStore(t)
+
+	create := SyncMutation{
+		Seq:       41,
+		TargetKey: DefaultSyncTargetKey,
+		Entity:    SyncEntitySession,
+		EntityKey: "remote-session",
+		Op:        SyncOpUpsert,
+		Payload:   `{"id":"remote-session","project":"ancora","directory":"/remote"}`,
+	}
+	if err := s.ApplyPulledMutation(DefaultSyncTargetKey, create); err != nil {
+		t.Fatalf("apply session mutation: %v", err)
+	}
+	if err := s.ApplyPulledMutation(DefaultSyncTargetKey, create); err != nil {
+		t.Fatalf("reapply session mutation: %v", err)
+	}
+
+	obsMutation := SyncMutation{
+		Seq:       42,
+		TargetKey: DefaultSyncTargetKey,
+		Entity:    SyncEntityObservation,
+		EntityKey: "obs-remote-1",
+		Op:        SyncOpUpsert,
+		Payload:   `{"sync_id":"obs-remote-1","session_id":"remote-session","type":"decision","title":"Remote","content":"Pulled from cloud","project":"ancora","scope":"project"}`,
+	}
+	if err := s.ApplyPulledMutation(DefaultSyncTargetKey, obsMutation); err != nil {
+		t.Fatalf("apply observation mutation: %v", err)
+	}
+	if err := s.ApplyPulledMutation(DefaultSyncTargetKey, obsMutation); err != nil {
+		t.Fatalf("reapply observation mutation: %v", err)
+	}
+
+	var rowCount int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM observations WHERE sync_id = ?", "obs-remote-1").Scan(&rowCount); err != nil {
+		t.Fatalf("count remote observation rows: %v", err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("expected one remote observation row after idempotent upsert, got %d", rowCount)
+	}
+
+	deleteMutation := SyncMutation{
+		Seq:       43,
+		TargetKey: DefaultSyncTargetKey,
+		Entity:    SyncEntityObservation,
+		EntityKey: "obs-remote-1",
+		Op:        SyncOpDelete,
+		Payload:   `{"sync_id":"obs-remote-1","deleted":true}`,
+	}
+	if err := s.ApplyPulledMutation(DefaultSyncTargetKey, deleteMutation); err != nil {
+		t.Fatalf("apply delete mutation: %v", err)
+	}
+	if err := s.ApplyPulledMutation(DefaultSyncTargetKey, deleteMutation); err != nil {
+		t.Fatalf("reapply delete mutation: %v", err)
+	}
+
+	if _, err := s.GetObservationBySyncID("obs-remote-1"); err == nil {
+		t.Fatalf("expected pulled delete to hide observation")
+	}
+
+	pending, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 10)
+	if err != nil {
+		t.Fatalf("list pending after pulled apply: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected pulled apply helpers to avoid local re-enqueue, got %+v", pending)
+	}
+
+	state, err := s.GetSyncState(DefaultSyncTargetKey)
+	if err != nil {
+		t.Fatalf("get sync state after pulled apply: %v", err)
+	}
+	if state.LastPulledSeq != 43 {
+		t.Fatalf("expected last pulled seq 43, got %d", state.LastPulledSeq)
+	}
+}
+
+func TestApplyPulledMutationAcceptsStringifiedSessionPayload(t *testing.T) {
+	s := newTestStore(t)
+
+	mutation := SyncMutation{
+		Seq:       1,
+		TargetKey: DefaultSyncTargetKey,
+		Entity:    SyncEntitySession,
+		EntityKey: "remote-session",
+		Op:        SyncOpUpsert,
+		Payload:   `"{\"id\":\"remote-session\",\"project\":\"Ancora\",\"directory\":\"/remote\"}"`,
+	}
+	if err := s.ApplyPulledMutation(DefaultSyncTargetKey, mutation); err != nil {
+		t.Fatalf("apply stringified session mutation: %v", err)
+	}
+
+	session, err := s.GetSession("remote-session")
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if session.Project != "Ancora" || session.Directory != "/remote" {
+		t.Fatalf("unexpected session after pulled apply: %+v", session)
+	}
+}
+
+func TestUtilityHelpersCoverage(t *testing.T) {
+	if got := derefString(nil); got != "" {
+		t.Fatalf("expected empty string for nil pointer, got %q", got)
+	}
+	v := "value"
+	if got := derefString(&v); got != "value" {
+		t.Fatalf("expected dereferenced value, got %q", got)
+	}
+
+	if got := maxInt(10, 5); got != 10 {
+		t.Fatalf("expected maxInt(10,5)=10, got %d", got)
+	}
+	if got := maxInt(3, 7); got != 7 {
+		t.Fatalf("expected maxInt(3,7)=7, got %d", got)
+	}
+
+	if got := dedupeWindowExpression(0); got != "-15 minutes" {
+		t.Fatalf("expected default dedupe window, got %q", got)
+	}
+	if got := dedupeWindowExpression(20 * time.Second); got != "-1 minutes" {
+		t.Fatalf("expected minimum 1 minute window, got %q", got)
+	}
+
+	cases := map[string]string{
+		"write":   "file_change",
+		"patch":   "file_change",
+		"bash":    "command",
+		"read":    "file_read",
+		"glob":    "search",
+		"unknown": "tool_use",
+	}
+	for in, want := range cases {
+		if got := ClassifyTool(in); got != want {
+			t.Fatalf("ClassifyTool(%q): expected %q, got %q", in, want, got)
+		}
+	}
+}
+
+func TestEndSessionAndTimelineDefaults(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s-end", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	firstID, err := s.AddObservation(AddObservationParams{
+		SessionID: "s-end",
+		Type:      "note",
+		Title:     "first",
+		Content:   "first note",
+		Workspace: "ancora",
+	})
+	if err != nil {
+		t.Fatalf("add first observation: %v", err)
+	}
+	_, err = s.AddObservation(AddObservationParams{
+		SessionID: "s-end",
+		Type:      "note",
+		Title:     "second",
+		Content:   "second note",
+		Workspace: "ancora",
+	})
+	if err != nil {
+		t.Fatalf("add second observation: %v", err)
+	}
+
+	if err := s.EndSession("s-end", "finished session"); err != nil {
+		t.Fatalf("end session: %v", err)
+	}
+
+	sess, err := s.GetSession("s-end")
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if sess.EndedAt == nil {
+		t.Fatalf("expected ended_at to be set")
+	}
+	if sess.Summary == nil || *sess.Summary != "finished session" {
+		t.Fatalf("expected summary to be stored, got %+v", sess.Summary)
+	}
+
+	timeline, err := s.Timeline(firstID, 0, -1)
+	if err != nil {
+		t.Fatalf("timeline with default before/after: %v", err)
+	}
+	if timeline.SessionInfo == nil {
+		t.Fatalf("expected session info in timeline")
+	}
+	if timeline.TotalInRange != 2 {
+		t.Fatalf("expected total_in_range=2, got %d", timeline.TotalInRange)
+	}
+}
+
+func TestInferTopicFamilyCoverage(t *testing.T) {
+	cases := []struct {
+		name    string
+		typ     string
+		title   string
+		content string
+		want    string
+	}{
+		{name: "type architecture", typ: "architecture", want: "architecture"},
+		{name: "type bugfix", typ: "bugfix", want: "bug"},
+		{name: "type decision", typ: "decision", want: "decision"},
+		{name: "type pattern", typ: "pattern", want: "pattern"},
+		{name: "type config", typ: "config", want: "config"},
+		{name: "type discovery", typ: "discovery", want: "discovery"},
+		{name: "type learning", typ: "learning", want: "learning"},
+		{name: "type session summary", typ: "session_summary", want: "session"},
+		{name: "text bug", title: "", content: "this caused a crash regression", want: "bug"},
+		{name: "text architecture", title: "", content: "new boundary design", want: "architecture"},
+		{name: "text decision", title: "", content: "we chose this tradeoff", want: "decision"},
+		{name: "text pattern", title: "", content: "naming convention for handlers", want: "pattern"},
+		{name: "text config", title: "", content: "docker env setup", want: "config"},
+		{name: "text discovery", title: "", content: "root cause found", want: "discovery"},
+		{name: "text learning", title: "", content: "key learning from this issue", want: "learning"},
+		{name: "fallback type", typ: "Custom Type", want: "custom-type"},
+		{name: "default topic", typ: "manual", title: "", content: "", want: "topic"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := inferTopicFamily(tc.typ, tc.title, tc.content)
+			if got != tc.want {
+				t.Fatalf("inferTopicFamily(%q,%q,%q): expected %q, got %q", tc.typ, tc.title, tc.content, tc.want, got)
+			}
+		})
+	}
+}
+
+func TestStoreAdditionalQueryAndMutationBranches(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s-q", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	longContent := strings.Repeat("x", s.cfg.MaxObservationLength+100)
+	obsID, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s-q",
+		Type:       "note",
+		Title:      "Private <private>secret</private> title",
+		Content:    longContent + " <private>token</private>",
+		Workspace:  "ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+	obs, err := s.GetObservation(obsID)
+	if err != nil {
+		t.Fatalf("get observation: %v", err)
+	}
+	if !strings.Contains(obs.Title, "[REDACTED]") {
+		t.Fatalf("expected private tags redacted in title, got %q", obs.Title)
+	}
+	if !strings.Contains(obs.Content, "... [truncated]") {
+		t.Fatalf("expected truncated content marker, got %q", obs.Content)
+	}
+
+	newProject := ""
+	newTopic := ""
+	updated, err := s.UpdateObservation(obsID, UpdateObservationParams{Workspace: &newProject, TopicKey: &newTopic})
+	if err != nil {
+		t.Fatalf("update observation: %v", err)
+	}
+	if updated.Workspace != nil {
+		t.Fatalf("expected nil project after empty update")
+	}
+	if updated.TopicKey != nil {
+		t.Fatalf("expected nil topic key after empty update")
+	}
+
+	if err := s.CreateSession("test", "alpha", ""); err != nil {
+		t.Fatalf("create test session: %v", err)
+	}
+	if _, err := s.AddPrompt(AddPromptParams{SessionID: "test", Content: "test", Project: "alpha"}); err != nil {
+		t.Fatalf("add alpha prompt: %v", err)
+	}
+	if _, err := s.AddPrompt(AddPromptParams{SessionID: "test", Content: "test", Project: "beta"}); err != nil {
+		t.Fatalf("add beta prompt: %v", err)
+	}
+
+	recentPrompts, err := s.RecentPrompts("beta", 1)
+	if err != nil {
+		t.Fatalf("recent prompts with project filter: %v", err)
+	}
+	if len(recentPrompts) != 1 || recentPrompts[0].Project != "beta" {
+		t.Fatalf("expected one beta prompt, got %+v", recentPrompts)
+	}
+
+	searchPrompts, err := s.SearchPrompts("test", "alpha", 0)
+	if err != nil {
+		t.Fatalf("search prompts with project filter/default limit: %v", err)
+	}
+	if len(searchPrompts) != 1 || searchPrompts[0].Project != "alpha" {
+		t.Fatalf("expected one alpha prompt search result, got %+v", searchPrompts)
+	}
+
+	searchResults, err := s.Search("title", SearchOptions{Visibility: "project", Limit: 9999})
+	if err != nil {
+		t.Fatalf("search with clamped limit: %v", err)
+	}
+	if len(searchResults) == 0 {
+		t.Fatalf("expected search results")
+	}
+
+	ctx, err := s.FormatContext("", "project")
+	if err != nil {
+		t.Fatalf("format context: %v", err)
+	}
+	if !strings.Contains(ctx, "Recent User Prompts") {
+		t.Fatalf("expected prompts section in context output")
+	}
+}
+
+func TestStoreErrorBranchesWithClosedDatabase(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	if _, err := s.GetSession("missing"); err == nil {
+		t.Fatalf("expected GetSession error when db is closed")
+	}
+	if _, err := s.AllSessions("", 1); err == nil {
+		t.Fatalf("expected AllSessions error when db is closed")
+	}
+	if _, err := s.RecentSessions("", 1); err == nil {
+		t.Fatalf("expected RecentSessions error when db is closed")
+	}
+	if _, err := s.SearchPrompts("x", "", 1); err == nil {
+		t.Fatalf("expected SearchPrompts error when db is closed")
+	}
+	if _, err := s.Search("x", SearchOptions{}); err == nil {
+		t.Fatalf("expected Search error when db is closed")
+	}
+	if _, err := s.Export(); err == nil {
+		t.Fatalf("expected Export error when db is closed")
+	}
+	if _, err := s.Timeline(1, 1, 1); err == nil {
+		t.Fatalf("expected Timeline error when db is closed")
+	}
+}
+
+func TestEndSessionEdgeCases(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s-edge", "ancora", "/tmp/ancora"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if err := s.EndSession("missing", "ignored"); err != nil {
+		t.Fatalf("end missing session should be no-op: %v", err)
+	}
+
+	if err := s.EndSession("s-edge", ""); err != nil {
+		t.Fatalf("end session with empty summary: %v", err)
+	}
+
+	sess, err := s.GetSession("s-edge")
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if sess.EndedAt == nil {
+		t.Fatalf("expected ended_at to be set")
+	}
+	if sess.Summary != nil {
+		t.Fatalf("expected empty summary to persist as NULL, got %q", *sess.Summary)
+	}
+}
+
+func TestTimelineHandlesMissingSessionRecord(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.db.Exec("PRAGMA foreign_keys = OFF"); err != nil {
+		t.Fatalf("disable fk: %v", err)
+	}
+	defer func() {
+		_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
+	}()
+
+	res, err := s.db.Exec(
+		`INSERT INTO observations (session_id, type, title, content, project, scope, normalized_hash, revision_count, duplicate_count, last_seen_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), datetime('now'))`,
+		"manual-save", "manual", "orphan", "orphan content", "ancora", "project", hashNormalized("orphan content"),
+	)
+	if err != nil {
+		t.Fatalf("insert orphan observation: %v", err)
+	}
+	obsID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("last insert id: %v", err)
+	}
+
+	timeline, err := s.Timeline(obsID, 1, 1)
+	if err != nil {
+		t.Fatalf("timeline: %v", err)
+	}
+	if timeline.SessionInfo != nil {
+		t.Fatalf("expected nil session info for missing session, got %+v", timeline.SessionInfo)
+	}
+	if timeline.TotalInRange != 1 {
+		t.Fatalf("expected total in range=1, got %d", timeline.TotalInRange)
+	}
+}
+
+func TestQueryObservationsScanError(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.queryObservations("SELECT 1"); err == nil {
+		t.Fatalf("expected scan error for mismatched projection")
+	}
+}
+
+func TestMigrationAndHelperEdgeBranches(t *testing.T) {
+	t.Run("migrate is idempotent with existing triggers", func(t *testing.T) {
+		s := newTestStore(t)
+		if err := s.migrate(); err != nil {
+			t.Fatalf("second migrate should succeed: %v", err)
+		}
+	})
+
+	t.Run("legacy migrate skips table without id column", func(t *testing.T) {
+		s := newTestStore(t)
+
+		if _, err := s.db.Exec(`
+			DROP TRIGGER IF EXISTS obs_fts_insert;
+			DROP TRIGGER IF EXISTS obs_fts_update;
+			DROP TRIGGER IF EXISTS obs_fts_delete;
+			DROP TABLE IF EXISTS observations_fts;
+			DROP TABLE observations;
+			CREATE TABLE observations (
+				session_id TEXT,
+				type TEXT,
+				title TEXT,
+				content TEXT
+			);
+		`); err != nil {
+			t.Fatalf("recreate observations without id: %v", err)
+		}
+
+		if err := s.migrateLegacyObservationsTable(); err != nil {
+			t.Fatalf("legacy migrate should skip tables without id: %v", err)
+		}
+	})
+
+	t.Run("topic helpers normalize edge cases", func(t *testing.T) {
+		if got := SuggestTopicKey("decision", "decision", ""); got != "decision/general" {
+			t.Fatalf("expected decision/general, got %q", got)
+		}
+		if got := SuggestTopicKey("bugfix", "bug-auth-panic", ""); got != "bug/auth-panic" {
+			t.Fatalf("expected bug/auth-panic, got %q", got)
+		}
+		if got := SuggestTopicKey("manual", "!!!", "..."); got != "topic/general" {
+			t.Fatalf("expected topic/general fallback, got %q", got)
+		}
+
+		longSegment := normalizeTopicSegment(strings.Repeat("abc", 50))
+		if len(longSegment) != 100 {
+			t.Fatalf("expected topic segment truncation to 100, got %d", len(longSegment))
+		}
+
+		longKey := normalizeTopicKey(strings.Repeat("k", 200))
+		if len(longKey) != 120 {
+			t.Fatalf("expected topic key truncation to 120, got %d", len(longKey))
+		}
+	})
+
+	t.Run("format context empty returns empty string", func(t *testing.T) {
+		s := newTestStore(t)
+		ctx, err := s.FormatContext("", "")
+		if err != nil {
+			t.Fatalf("format context: %v", err)
+		}
+		if ctx != "" {
+			t.Fatalf("expected empty context when no data, got %q", ctx)
+		}
+	})
+}
+
+func TestExportImportEdgeBranches(t *testing.T) {
+	t.Run("export fails when observations query fails", func(t *testing.T) {
+		s := newTestStore(t)
+
+		if _, err := s.db.Exec(`
+			DROP TRIGGER IF EXISTS obs_fts_insert;
+			DROP TRIGGER IF EXISTS obs_fts_update;
+			DROP TRIGGER IF EXISTS obs_fts_delete;
+			DROP TABLE IF EXISTS observations_fts;
+			DROP TABLE observations;
+		`); err != nil {
+			t.Fatalf("drop observations: %v", err)
+		}
+
+		_, err := s.Export()
+		if err == nil || !strings.Contains(err.Error(), "export observations") {
+			t.Fatalf("expected observations export error, got %v", err)
+		}
+	})
+
+	t.Run("export fails when prompts query fails", func(t *testing.T) {
+		s := newTestStore(t)
+
+		if _, err := s.db.Exec(`
+			DROP TRIGGER IF EXISTS prompt_fts_insert;
+			DROP TRIGGER IF EXISTS prompt_fts_update;
+			DROP TRIGGER IF EXISTS prompt_fts_delete;
+			DROP TABLE IF EXISTS prompts_fts;
+			DROP TABLE user_prompts;
+		`); err != nil {
+			t.Fatalf("drop prompts: %v", err)
+		}
+
+		_, err := s.Export()
+		if err == nil || !strings.Contains(err.Error(), "export prompts") {
+			t.Fatalf("expected prompts export error, got %v", err)
+		}
+	})
+
+	t.Run("import begin tx fails on closed db", func(t *testing.T) {
+		s := newTestStore(t)
+		if err := s.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+
+		_, err := s.Import(&ExportData{})
+		if err == nil || !strings.Contains(err.Error(), "begin tx") {
+			t.Fatalf("expected begin tx import error, got %v", err)
+		}
+	})
+
+	t.Run("import fails on observation fk error", func(t *testing.T) {
+		s := newTestStore(t)
+		_, err := s.Import(&ExportData{
+			Observations: []Observation{{
+				ID:         1,
+				SessionID:  "missing-session",
+				Type:       "bugfix",
+				Title:      "x",
+				Content:    "y",
+				Visibility: "project",
+				CreatedAt:  Now(),
+				UpdatedAt:  Now(),
+			}},
+		})
+		if err == nil || !strings.Contains(err.Error(), "import observation") {
+			t.Fatalf("expected observation import error, got %v", err)
+		}
+	})
+
+	t.Run("import fails on prompt fk error", func(t *testing.T) {
+		s := newTestStore(t)
+		_, err := s.Import(&ExportData{
+			Prompts: []Prompt{{
+				ID:        1,
+				SessionID: "missing-session",
+				Content:   "prompt",
+				Project:   "ancora",
+				CreatedAt: Now(),
+			}},
+		})
+		if err == nil || !strings.Contains(err.Error(), "import prompt") {
+			t.Fatalf("expected prompt import error, got %v", err)
+		}
+	})
+}
+
+func TestNewErrorBranches(t *testing.T) {
+	t.Run("fails when data dir is a file", func(t *testing.T) {
+		base := t.TempDir()
+		badPath := filepath.Join(base, "not-a-dir")
+		if err := os.WriteFile(badPath, []byte("x"), 0600); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+
+		cfg := mustDefaultConfig(t)
+		cfg.DataDir = badPath
+
+		_, err := New(cfg)
+		if err == nil || !strings.Contains(err.Error(), "create data dir") {
+			t.Fatalf("expected create data dir error, got %v", err)
+		}
+	})
+
+	t.Run("fails when db path is a directory", func(t *testing.T) {
+		dataDir := t.TempDir()
+		dbAsDir := filepath.Join(dataDir, "ancora.db")
+		if err := os.Mkdir(dbAsDir, 0755); err != nil {
+			t.Fatalf("mkdir db path: %v", err)
+		}
+
+		cfg := mustDefaultConfig(t)
+		cfg.DataDir = dataDir
+
+		_, err := New(cfg)
+		if err == nil {
+			t.Fatalf("expected New to fail when db path is a directory")
+		}
+	})
+
+	t.Run("fails when migration encounters conflicting object", func(t *testing.T) {
+		dataDir := t.TempDir()
+		dbPath := filepath.Join(dataDir, "ancora.db")
+
+		db, err := sql.Open("sqlite", dbPath)
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		_, err = db.Exec(`
+			CREATE TABLE sessions (
+				id TEXT PRIMARY KEY,
+				project TEXT NOT NULL,
+				directory TEXT NOT NULL,
+				started_at TEXT NOT NULL,
+				ended_at TEXT,
+				summary TEXT
+			);
+			CREATE TABLE user_prompts (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				session_id TEXT NOT NULL,
+				content TEXT NOT NULL,
+				created_at TEXT NOT NULL
+			);
+		`)
+		if err != nil {
+			_ = db.Close()
+			t.Fatalf("create conflicting view: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close db: %v", err)
+		}
+
+		cfg := mustDefaultConfig(t)
+		cfg.DataDir = dataDir
+
+		_, err = New(cfg)
+		if err == nil || !strings.Contains(err.Error(), "migration") {
+			t.Fatalf("expected migration error, got %v", err)
+		}
+	})
+}
+
+func TestMigrationInternalErrorAndNoopBranches(t *testing.T) {
+	t.Run("addColumnIfNotExists adds then noops", func(t *testing.T) {
+		s := newTestStore(t)
+		if _, err := s.db.Exec(`CREATE TABLE extra_table (id INTEGER)`); err != nil {
+			t.Fatalf("create extra table: %v", err)
+		}
+
+		if err := s.addColumnIfNotExists("extra_table", "name", "TEXT"); err != nil {
+			t.Fatalf("add column: %v", err)
+		}
+		if err := s.addColumnIfNotExists("extra_table", "name", "TEXT"); err != nil {
+			t.Fatalf("add existing column should noop: %v", err)
+		}
+
+		if err := s.addColumnIfNotExists("missing_table", "x", "TEXT"); err == nil {
+			t.Fatalf("expected missing table error")
+		}
+	})
+
+	t.Run("legacy migrate noops when id is primary key", func(t *testing.T) {
+		s := newTestStore(t)
+		if err := s.migrateLegacyObservationsTable(); err != nil {
+			t.Fatalf("expected noop for modern schema: %v", err)
+		}
+	})
+
+	t.Run("legacy migrate fails if temp table already exists", func(t *testing.T) {
+		s := newTestStore(t)
+		if _, err := s.db.Exec(`
+			DROP TRIGGER IF EXISTS obs_fts_insert;
+			DROP TRIGGER IF EXISTS obs_fts_update;
+			DROP TRIGGER IF EXISTS obs_fts_delete;
+			DROP TABLE IF EXISTS observations_fts;
+			DROP TABLE observations;
+			CREATE TABLE observations (
+				id INT,
+				session_id TEXT,
+				type TEXT,
+				title TEXT,
+				content TEXT,
+				created_at TEXT,
+				project TEXT,
+				scope TEXT
+			);
+			CREATE TABLE observations_migrated (id INTEGER PRIMARY KEY);
+		`); err != nil {
+			t.Fatalf("prepare legacy schema: %v", err)
+		}
+
+		err := s.migrateLegacyObservationsTable()
+		if err == nil || !strings.Contains(err.Error(), "create table") {
+			t.Fatalf("expected create table error, got %v", err)
+		}
+	})
+
+	t.Run("migrate returns deterministic exec hook errors", func(t *testing.T) {
+		s := newTestStore(t)
+
+		origExec := s.hooks.exec
+		s.hooks.exec = func(db execer, query string, args ...any) (sql.Result, error) {
+			// PR5: Removed scope backfill test - testing a different migration query instead
+			if strings.Contains(query, "UPDATE observations SET topic_key = NULL") {
+				return nil, errors.New("forced migrate update failure")
+			}
+			return origExec(db, query, args...)
+		}
+
+		err := s.migrate()
+		if err == nil || !strings.Contains(err.Error(), "forced migrate update failure") {
+			t.Fatalf("expected forced migrate failure, got %v", err)
+		}
+	})
+
+	t.Run("migrate fails when creating missing triggers", func(t *testing.T) {
+		s := newTestStore(t)
+
+		if _, err := s.db.Exec(`
+			DROP TRIGGER IF EXISTS obs_fts_insert;
+			DROP TRIGGER IF EXISTS obs_fts_update;
+			DROP TRIGGER IF EXISTS obs_fts_delete;
+		`); err != nil {
+			t.Fatalf("drop obs triggers: %v", err)
+		}
+
+		origExec := s.hooks.exec
+		s.hooks.exec = func(db execer, query string, args ...any) (sql.Result, error) {
+			if strings.Contains(query, "CREATE TRIGGER obs_fts_insert") {
+				return nil, errors.New("forced obs trigger failure")
+			}
+			return origExec(db, query, args...)
+		}
+
+		err := s.migrate()
+		if err == nil || !strings.Contains(err.Error(), "forced obs trigger failure") {
+			t.Fatalf("expected forced trigger failure, got %v", err)
+		}
+	})
+
+	t.Run("legacy migrate surfaces begin and commit hook failures", func(t *testing.T) {
+		prepareLegacyStore := func(t *testing.T) *Store {
+			t.Helper()
+			s := newTestStore(t)
+			if _, err := s.db.Exec(`
+				DROP TRIGGER IF EXISTS obs_fts_insert;
+				DROP TRIGGER IF EXISTS obs_fts_update;
+				DROP TRIGGER IF EXISTS obs_fts_delete;
+				DROP TABLE IF EXISTS observations_fts;
+				DROP TABLE observations;
+				INSERT OR IGNORE INTO sessions (id, project, directory) VALUES ('s1', 'ancora', '/tmp/ancora');
+				CREATE TABLE observations (
+					id INT,
+					session_id TEXT,
+					type TEXT,
+					title TEXT,
+					content TEXT,
+					tool_name TEXT,
+					project TEXT,
+					scope TEXT,
+					topic_key TEXT,
+					normalized_hash TEXT,
+					revision_count INTEGER,
+					duplicate_count INTEGER,
+					last_seen_at TEXT,
+					created_at TEXT,
+					updated_at TEXT,
+					deleted_at TEXT
+				);
+				INSERT INTO observations (id, session_id, type, title, content, project, created_at, updated_at)
+				VALUES (1, 's1', 'bugfix', 'legacy', 'legacy row', 'ancora', datetime('now'), datetime('now'));
+			`); err != nil {
+				t.Fatalf("prepare legacy table: %v", err)
+			}
+			return s
+		}
+
+		t.Run("begin tx", func(t *testing.T) {
+			s := prepareLegacyStore(t)
+			s.hooks.beginTx = func(_ *sql.DB) (*sql.Tx, error) {
+				return nil, errors.New("forced begin failure")
+			}
+
+			err := s.migrateLegacyObservationsTable()
+			if err == nil || !strings.Contains(err.Error(), "forced begin failure") {
+				t.Fatalf("expected begin failure, got %v", err)
+			}
+		})
+
+		t.Run("commit", func(t *testing.T) {
+			s := prepareLegacyStore(t)
+			s.hooks.commit = func(_ *sql.Tx) error {
+				return errors.New("forced legacy commit failure")
+			}
+
+			err := s.migrateLegacyObservationsTable()
+			if err == nil || !strings.Contains(err.Error(), "forced legacy commit failure") {
+				t.Fatalf("expected commit failure, got %v", err)
+			}
+		})
+	})
+}
+
+func TestImportExportSeamErrors(t *testing.T) {
+	t.Run("export query hooks", func(t *testing.T) {
+		s := newTestStore(t)
+
+		origQueryIt := s.hooks.queryIt
+		s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+			if strings.Contains(query, "FROM sessions") {
+				return nil, errors.New("forced sessions export query error")
+			}
+			return origQueryIt(db, query, args...)
+		}
+		if _, err := s.Export(); err == nil || !strings.Contains(err.Error(), "export sessions") {
+			t.Fatalf("expected sessions export error, got %v", err)
+		}
+
+		s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+			if strings.Contains(query, "FROM observations") {
+				return nil, errors.New("forced observations export query error")
+			}
+			return origQueryIt(db, query, args...)
+		}
+		if _, err := s.Export(); err == nil || !strings.Contains(err.Error(), "export observations") {
+			t.Fatalf("expected observations export error, got %v", err)
+		}
+
+		s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+			if strings.Contains(query, "FROM user_prompts") {
+				return nil, errors.New("forced prompts export query error")
+			}
+			return origQueryIt(db, query, args...)
+		}
+		if _, err := s.Export(); err == nil || !strings.Contains(err.Error(), "export prompts") {
+			t.Fatalf("expected prompts export error, got %v", err)
+		}
+	})
+
+	t.Run("import tx and exec hooks", func(t *testing.T) {
+		s := newTestStore(t)
+
+		s.hooks.beginTx = func(_ *sql.DB) (*sql.Tx, error) {
+			return nil, errors.New("forced import begin failure")
+		}
+		if _, err := s.Import(&ExportData{}); err == nil || !strings.Contains(err.Error(), "begin tx") {
+			t.Fatalf("expected begin tx error, got %v", err)
+		}
+
+		s.hooks = defaultStoreHooks()
+		origExec := s.hooks.exec
+		s.hooks.exec = func(db execer, query string, args ...any) (sql.Result, error) {
+			if strings.Contains(query, "INSERT OR IGNORE INTO sessions") {
+				return nil, errors.New("forced import session insert failure")
+			}
+			return origExec(db, query, args...)
+		}
+		if _, err := s.Import(&ExportData{Sessions: []Session{{ID: "test", Project: "p", Directory: "/tmp", StartedAt: Now()}}}); err == nil || !strings.Contains(err.Error(), "import session") {
+			t.Fatalf("expected session import error, got %v", err)
+		}
+
+		s.hooks = defaultStoreHooks()
+		s.hooks.commit = func(_ *sql.Tx) error {
+			return errors.New("forced import commit failure")
+		}
+		if _, err := s.Import(&ExportData{}); err == nil || !strings.Contains(err.Error(), "import: commit") {
+			t.Fatalf("expected commit error, got %v", err)
+		}
+	})
+}
+
+func TestHookFallbacksAndAdditionalBranches(t *testing.T) {
+	t.Run("hook fallbacks call default DB methods", func(t *testing.T) {
+		s := newTestStore(t)
+		s.hooks = storeHooks{}
+
+		if _, err := s.execHook(s.db, "SELECT 1"); err != nil {
+			t.Fatalf("exec hook fallback: %v", err)
+		}
+		rows, err := s.queryHook(s.db, "SELECT 1")
+		if err != nil {
+			t.Fatalf("query hook fallback: %v", err)
+		}
+		_ = rows.Close()
+
+		iter, err := s.queryItHook(s.db, "SELECT 1")
+		if err != nil {
+			t.Fatalf("query iterator fallback: %v", err)
+		}
+		_ = iter.Close()
+
+		tx, err := s.beginTxHook()
+		if err != nil {
+			t.Fatalf("begin tx hook fallback: %v", err)
+		}
+		if err := s.commitHook(tx); err != nil {
+			t.Fatalf("commit hook fallback: %v", err)
+		}
+
+		s2 := newTestStore(t)
+		rows2, err := s2.queryHook(s2.db, "SELECT 1")
+		if err != nil {
+			t.Fatalf("query hook default closure: %v", err)
+		}
+		_ = rows2.Close()
+
+		s.hooks.query = func(db queryer, query string, args ...any) (*sql.Rows, error) {
+			return nil, errors.New("forced query hook error")
+		}
+		s.hooks.queryIt = nil
+		if _, err := s.queryItHook(s.db, "SELECT 1"); err == nil {
+			t.Fatalf("expected queryItHook error through queryHook fallback")
+		}
+	})
+
+	t.Run("sessions and observations filters with default limits", func(t *testing.T) {
+		s := newTestStore(t)
+		if err := s.CreateSession("s-p", "proj-a", "/tmp/proj-a"); err != nil {
+			t.Fatalf("create session proj-a: %v", err)
+		}
+		if err := s.CreateSession("s-q", "proj-b", "/tmp/proj-b"); err != nil {
+			t.Fatalf("create session proj-b: %v", err)
+		}
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-p", Type: "note", Title: "a", Content: "a", Workspace: "proj-a", Visibility: "project"}); err != nil {
+			t.Fatalf("add observation proj-a: %v", err)
+		}
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-q", Type: "note", Title: "b", Content: "b", Workspace: "proj-b", Visibility: "project"}); err != nil {
+			t.Fatalf("add observation proj-b: %v", err)
+		}
+
+		recent, err := s.RecentSessions("proj-a", 0)
+		if err != nil {
+			t.Fatalf("recent sessions filtered: %v", err)
+		}
+		if len(recent) != 1 || recent[0].Project != "proj-a" {
+			t.Fatalf("expected one proj-a recent session, got %+v", recent)
+		}
+
+		all, err := s.AllSessions("proj-b", -1)
+		if err != nil {
+			t.Fatalf("all sessions filtered: %v", err)
+		}
+		if len(all) != 1 || all[0].Project != "proj-b" {
+			t.Fatalf("expected one proj-b session, got %+v", all)
+		}
+
+		obs, err := s.AllObservations("proj-a", "project", 0)
+		if err != nil {
+			t.Fatalf("all observations defaults: %v", err)
+		}
+		if len(obs) != 1 || obs[0].SessionID != "s-p" {
+			t.Fatalf("expected one proj-a observation, got %+v", obs)
+		}
+
+		sessionObs, err := s.SessionObservations("s-p", 0)
+		if err != nil {
+			t.Fatalf("session observations default limit: %v", err)
+		}
+		if len(sessionObs) != 1 {
+			t.Fatalf("expected one session observation, got %d", len(sessionObs))
+		}
+
+		recentObs, err := s.RecentObservations("proj-a", "project", 0)
+		if err != nil {
+			t.Fatalf("recent observations default limit: %v", err)
+		}
+		if len(recentObs) != 1 {
+			t.Fatalf("expected one recent observation, got %d", len(recentObs))
+		}
+
+		recentPrompts, err := s.RecentPrompts("", 0)
+		if err != nil {
+			t.Fatalf("recent prompts default limit: %v", err)
+		}
+		if len(recentPrompts) != 0 {
+			t.Fatalf("expected zero prompts, got %d", len(recentPrompts))
+		}
+	})
+
+	t.Run("timeline includes before and after in chronological order", func(t *testing.T) {
+		s := newTestStore(t)
+		if err := s.CreateSession("s-tl", "ancora", "/tmp/ancora"); err != nil {
+			t.Fatalf("create session: %v", err)
+		}
+
+		firstID, err := s.AddObservation(AddObservationParams{SessionID: "s-tl", Type: "note", Title: "1", Content: "one", Workspace: "ancora"})
+		if err != nil {
+			t.Fatalf("add first observation: %v", err)
+		}
+		middleID, err := s.AddObservation(AddObservationParams{SessionID: "s-tl", Type: "note", Title: "2", Content: "two", Workspace: "ancora"})
+		if err != nil {
+			t.Fatalf("add middle observation: %v", err)
+		}
+		lastID, err := s.AddObservation(AddObservationParams{SessionID: "s-tl", Type: "note", Title: "3", Content: "three", Workspace: "ancora"})
+		if err != nil {
+			t.Fatalf("add last observation: %v", err)
+		}
+
+		tl, err := s.Timeline(middleID, 5, 5)
+		if err != nil {
+			t.Fatalf("timeline middle: %v", err)
+		}
+		if len(tl.Before) != 1 || tl.Before[0].ID != firstID {
+			t.Fatalf("expected first in before list, got %+v", tl.Before)
+		}
+		if len(tl.After) != 1 || tl.After[0].ID != lastID {
+			t.Fatalf("expected last in after list, got %+v", tl.After)
+		}
+	})
+
+	t.Run("format context returns specific query stage errors", func(t *testing.T) {
+		t.Run("recent sessions error", func(t *testing.T) {
+			s := newTestStore(t)
+			_ = s.Close()
+			if _, err := s.FormatContext("", ""); err == nil {
+				t.Fatalf("expected format context to fail from recent sessions")
+			}
+		})
+
+		t.Run("recent observations error", func(t *testing.T) {
+			s := newTestStore(t)
+			if err := s.CreateSession("s-ctx", "ancora", "/tmp/ancora"); err != nil {
+				t.Fatalf("create session: %v", err)
+			}
+			if _, err := s.db.Exec("DROP TABLE observations"); err != nil {
+				t.Fatalf("drop observations: %v", err)
+			}
+			if _, err := s.FormatContext("", ""); err == nil {
+				t.Fatalf("expected format context to fail from recent observations")
+			}
+		})
+
+		t.Run("recent prompts error", func(t *testing.T) {
+			s := newTestStore(t)
+			if err := s.CreateSession("s-ctx2", "ancora", "/tmp/ancora"); err != nil {
+				t.Fatalf("create session: %v", err)
+			}
+			if _, err := s.db.Exec("DROP TABLE user_prompts"); err != nil {
+				t.Fatalf("drop prompts: %v", err)
+			}
+			if _, err := s.FormatContext("", ""); err == nil {
+				t.Fatalf("expected format context to fail from recent prompts")
+			}
+		})
+	})
+}
+
+func TestStoreUncoveredBranchesPushToHundred(t *testing.T) {
+	t.Run("new open database hook error", func(t *testing.T) {
+		orig := openDB
+		t.Cleanup(func() { openDB = orig })
+		openDB = func(driverName, dataSourceName string) (*sql.DB, error) {
+			return nil, errors.New("forced open error")
+		}
+
+		cfg := mustDefaultConfig(t)
+		cfg.DataDir = t.TempDir()
+		if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "open database") {
+			t.Fatalf("expected open database error, got %v", err)
+		}
+	})
+
+	t.Run("migrate forced failures for remaining exec branches", func(t *testing.T) {
+		failCases := []string{
+			"UPDATE observations SET topic_key = NULL",
+			"UPDATE observations SET revision_count = 1",
+			"UPDATE observations SET duplicate_count = 1",
+			"UPDATE observations SET updated_at = created_at",
+			"UPDATE user_prompts SET project = ''",
+			"CREATE TRIGGER prompt_fts_insert",
+		}
+		for _, needle := range failCases {
+			t.Run(needle, func(t *testing.T) {
+				s := newTestStore(t)
+				if strings.Contains(needle, "CREATE TRIGGER prompt_fts_insert") {
+					if _, err := s.db.Exec(`
+						DROP TRIGGER IF EXISTS prompt_fts_insert;
+						DROP TRIGGER IF EXISTS prompt_fts_update;
+						DROP TRIGGER IF EXISTS prompt_fts_delete;
+					`); err != nil {
+						t.Fatalf("drop prompt triggers: %v", err)
+					}
+				}
+				origExec := s.hooks.exec
+				s.hooks.exec = func(db execer, query string, args ...any) (sql.Result, error) {
+					if strings.Contains(query, needle) {
+						return nil, errors.New("forced migrate failure")
+					}
+					return origExec(db, query, args...)
+				}
+				if err := s.migrate(); err == nil {
+					t.Fatalf("expected migrate error for %q", needle)
+				}
+			})
+		}
+	})
+
+	t.Run("migrate addColumn and legacy-call propagation", func(t *testing.T) {
+		t.Run("propagates addColumn error", func(t *testing.T) {
+			s := newTestStore(t)
+			origQueryIt := s.hooks.queryIt
+			called := 0
+			s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+				if strings.Contains(query, "PRAGMA table_info(observations)") {
+					called++
+					if called == 1 {
+						return nil, errors.New("forced addColumn failure")
+					}
+				}
+				return origQueryIt(db, query, args...)
+			}
+			if err := s.migrate(); err == nil {
+				t.Fatalf("expected migrate to propagate addColumn failure")
+			}
+		})
+
+		t.Run("propagates legacy migrate error", func(t *testing.T) {
+			s := newTestStore(t)
+			origQueryIt := s.hooks.queryIt
+			called := 0
+			s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+				if strings.Contains(query, "PRAGMA table_info(observations)") {
+					called++
+					if called == 9 {
+						return nil, errors.New("forced legacy call failure")
+					}
+				}
+				return origQueryIt(db, query, args...)
+			}
+			if err := s.migrate(); err == nil {
+				t.Fatalf("expected migrate to propagate legacy migrate failure")
+			}
+		})
+	})
+
+	t.Run("add observation, prompt, update forced errors", func(t *testing.T) {
+		s := newTestStore(t)
+		if err := s.CreateSession("s-e", "ancora", "/tmp/ancora"); err != nil {
+			t.Fatalf("create session: %v", err)
+		}
+
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "top", Content: "x", Workspace: "ancora", TopicKey: "x"}); err != nil {
+			t.Fatalf("seed topic observation: %v", err)
+		}
+		origExec := s.hooks.exec
+		s.hooks.exec = func(db execer, query string, args ...any) (sql.Result, error) {
+			if strings.Contains(query, "SET type = ?") {
+				return nil, errors.New("forced topic update error")
+			}
+			return origExec(db, query, args...)
+		}
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "top", Content: "x", Workspace: "ancora", TopicKey: "x"}); err == nil {
+			t.Fatalf("expected topic upsert exec error")
+		}
+
+		s.hooks = defaultStoreHooks()
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "dup", Content: "dup content", Workspace: "ancora"}); err != nil {
+			t.Fatalf("seed dedupe observation: %v", err)
+		}
+		origExec = s.hooks.exec
+		s.hooks.exec = func(db execer, query string, args ...any) (sql.Result, error) {
+			if strings.Contains(query, "SET duplicate_count = duplicate_count + 1") {
+				return nil, errors.New("forced dedupe update error")
+			}
+			return origExec(db, query, args...)
+		}
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "dup", Content: "dup content", Workspace: "ancora"}); err == nil {
+			t.Fatalf("expected dedupe exec error")
+		}
+
+		if err := s.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "x", Content: "y", Workspace: "ancora", TopicKey: "t"}); err == nil {
+			t.Fatalf("expected topic query error on closed db")
+		}
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-e", Type: "note", Title: "x", Content: "y", Workspace: "ancora"}); err == nil {
+			t.Fatalf("expected dedupe query error on closed db")
+		}
+		if _, err := s.AddPrompt(AddPromptParams{SessionID: "s-e", Content: "x"}); err == nil {
+			t.Fatalf("expected add prompt error on closed db")
+		}
+	})
+
+	t.Run("update observation remaining branches", func(t *testing.T) {
+		s := newTestStore(t)
+		if err := s.CreateSession("s-u", "ancora", "/tmp/ancora"); err != nil {
+			t.Fatalf("create session: %v", err)
+		}
+		id, err := s.AddObservation(AddObservationParams{SessionID: "s-u", Type: "old", Title: "t", Content: "c", Workspace: "ancora", TopicKey: "topic/key"})
+		if err != nil {
+			t.Fatalf("seed observation: %v", err)
+		}
+
+		if _, err := s.UpdateObservation(999999, UpdateObservationParams{}); err == nil {
+			t.Fatalf("expected update missing observation error")
+		}
+
+		newType := "new-type"
+		longContent := strings.Repeat("z", s.cfg.MaxObservationLength+50)
+		if _, err := s.UpdateObservation(id, UpdateObservationParams{Type: &newType, Content: &longContent}); err != nil {
+			t.Fatalf("update with type+truncation: %v", err)
+		}
+
+		origExec := s.hooks.exec
+		s.hooks.exec = func(db execer, query string, args ...any) (sql.Result, error) {
+			if strings.Contains(query, "UPDATE observations") {
+				return nil, errors.New("forced update exec error")
+			}
+			return origExec(db, query, args...)
+		}
+		if _, err := s.UpdateObservation(id, UpdateObservationParams{}); err == nil {
+			t.Fatalf("expected update exec error")
+		}
+	})
+
+	t.Run("query iterator scan and rows.Err branches", func(t *testing.T) {
+		s := newTestStore(t)
+		origQueryIt := s.hooks.queryIt
+
+		setScanErr := func(match string) {
+			s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+				if strings.Contains(query, match) {
+					return &fakeRows{next: []bool{true, false}, scanErr: errors.New("forced scan error")}, nil
+				}
+				return origQueryIt(db, query, args...)
+			}
+		}
+
+		setRowsErr := func(match string) {
+			s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+				if strings.Contains(query, match) {
+					return &fakeRows{next: []bool{false}, err: errors.New("forced rows err")}, nil
+				}
+				return origQueryIt(db, query, args...)
+			}
+		}
+
+		if err := s.CreateSession("s-iter", "ancora", "/tmp/ancora"); err != nil {
+			t.Fatalf("create session: %v", err)
+		}
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-iter", Type: "note", Title: "one", Content: "one", Workspace: "ancora"}); err != nil {
+			t.Fatalf("add observation: %v", err)
+		}
+		if _, err := s.AddPrompt(AddPromptParams{SessionID: "s-iter", Content: "test", Project: "ancora"}); err != nil {
+			t.Fatalf("add prompt: %v", err)
+		}
+
+		setScanErr("FROM sessions s")
+		if _, err := s.RecentSessions("", 10); err == nil {
+			t.Fatalf("expected recent sessions scan error")
+		}
+
+		setScanErr("FROM sessions s")
+		if _, err := s.AllSessions("", 10); err == nil {
+			t.Fatalf("expected all sessions scan error")
+		}
+
+		setScanErr("FROM user_prompts")
+		if _, err := s.RecentPrompts("", 10); err == nil {
+			t.Fatalf("expected recent prompts scan error")
+		}
+
+		setScanErr("FROM prompts_fts")
+		if _, err := s.SearchPrompts("prompt", "", 10); err == nil {
+			t.Fatalf("expected search prompts scan error")
+		}
+
+		setScanErr("FROM observations_fts")
+		if _, err := s.Search("one", SearchOptions{}); err == nil {
+			t.Fatalf("expected search scan error")
+		}
+
+		setRowsErr("FROM observations_fts")
+		if _, err := s.Search("one", SearchOptions{}); err == nil {
+			t.Fatalf("expected search rows err")
+		}
+
+		setScanErr("SELECT id, project, directory")
+		if _, err := s.Export(); err == nil {
+			t.Fatalf("expected export sessions scan error")
+		}
+
+		setRowsErr("SELECT id, project, directory")
+		if _, err := s.Export(); err == nil {
+			t.Fatalf("expected export sessions rows err")
+		}
+
+		setScanErr("FROM observations ORDER BY id")
+		if _, err := s.Export(); err == nil {
+			t.Fatalf("expected export observations scan error")
+		}
+
+		setRowsErr("FROM observations ORDER BY id")
+		if _, err := s.Export(); err == nil {
+			t.Fatalf("expected export observations rows err")
+		}
+
+		setScanErr("FROM user_prompts ORDER BY id")
+		if _, err := s.Export(); err == nil {
+			t.Fatalf("expected export prompts scan error")
+		}
+
+		setRowsErr("FROM user_prompts ORDER BY id")
+		if _, err := s.Export(); err == nil {
+			t.Fatalf("expected export prompts rows err")
+		}
+
+		setScanErr("FROM sync_chunks")
+		if _, err := s.GetSyncedChunks(); err == nil {
+			t.Fatalf("expected synced chunks scan error")
+		}
+
+		setRowsErr("PRAGMA table_info(extra_table)")
+		if _, err := s.db.Exec(`CREATE TABLE extra_table (id INTEGER)`); err != nil {
+			t.Fatalf("create extra table: %v", err)
+		}
+		if err := s.addColumnIfNotExists("extra_table", "n", "TEXT"); err == nil {
+			t.Fatalf("expected add column rows err")
+		}
+
+		setScanErr("PRAGMA table_info(extra_table)")
+		if err := s.addColumnIfNotExists("extra_table", "n2", "TEXT"); err == nil {
+			t.Fatalf("expected add column scan error")
+		}
+
+		setRowsErr("PRAGMA table_info(observations)")
+		if err := s.migrateLegacyObservationsTable(); err == nil {
+			t.Fatalf("expected legacy migrate pragma rows err")
+		}
+
+		setScanErr("PRAGMA table_info(observations)")
+		if err := s.migrateLegacyObservationsTable(); err == nil {
+			t.Fatalf("expected legacy migrate pragma scan error")
+		}
+
+		s.hooks.queryIt = origQueryIt
+	})
+
+	t.Run("timeline and search type filter branches", func(t *testing.T) {
+		s := newTestStore(t)
+		if err := s.CreateSession("s-t2", "ancora", "/tmp/ancora"); err != nil {
+			t.Fatalf("create session: %v", err)
+		}
+		first, _ := s.AddObservation(AddObservationParams{SessionID: "s-t2", Type: "decision", Title: "a", Content: "a", Workspace: "ancora"})
+		_, _ = s.AddObservation(AddObservationParams{SessionID: "s-t2", Type: "decision", Title: "aa", Content: "aa", Workspace: "ancora"})
+		focus, _ := s.AddObservation(AddObservationParams{SessionID: "s-t2", Type: "decision", Title: "b", Content: "b", Workspace: "ancora"})
+		_, _ = s.AddObservation(AddObservationParams{SessionID: "s-t2", Type: "decision", Title: "c", Content: "c", Workspace: "ancora"})
+
+		if _, err := s.Search("b", SearchOptions{Type: "decision", Workspace: "ancora", Visibility: "project", Limit: 5}); err != nil {
+			t.Fatalf("search with type filter: %v", err)
+		}
+
+		origQueryIt := s.hooks.queryIt
+		s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+			if strings.Contains(query, "id < ?") {
+				return nil, errors.New("forced before query error")
+			}
+			return origQueryIt(db, query, args...)
+		}
+		if _, err := s.Timeline(focus, 2, 2); err == nil {
+			t.Fatalf("expected timeline before query error")
+		}
+
+		s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+			if strings.Contains(query, "id < ?") {
+				return &fakeRows{next: []bool{true, false}, scanErr: errors.New("forced before scan error")}, nil
+			}
+			return origQueryIt(db, query, args...)
+		}
+		if _, err := s.Timeline(focus, 2, 2); err == nil {
+			t.Fatalf("expected timeline before scan error")
+		}
+
+		s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+			if strings.Contains(query, "id < ?") {
+				return &fakeRows{next: []bool{false}, err: errors.New("forced before rows err")}, nil
+			}
+			return origQueryIt(db, query, args...)
+		}
+		if _, err := s.Timeline(focus, 2, 2); err == nil {
+			t.Fatalf("expected timeline before rows err")
+		}
+
+		s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+			if strings.Contains(query, "id > ?") {
+				return nil, errors.New("forced after query error")
+			}
+			return origQueryIt(db, query, args...)
+		}
+		if _, err := s.Timeline(focus, 2, 2); err == nil {
+			t.Fatalf("expected timeline after query error")
+		}
+
+		s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+			if strings.Contains(query, "id > ?") {
+				return &fakeRows{next: []bool{true, false}, scanErr: errors.New("forced after scan error")}, nil
+			}
+			return origQueryIt(db, query, args...)
+		}
+		if _, err := s.Timeline(focus, 2, 2); err == nil {
+			t.Fatalf("expected timeline after scan error")
+		}
+
+		s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+			if strings.Contains(query, "id > ?") {
+				return &fakeRows{next: []bool{false}, err: errors.New("forced after rows err")}, nil
+			}
+			return origQueryIt(db, query, args...)
+		}
+		if _, err := s.Timeline(focus, 2, 2); err == nil {
+			t.Fatalf("expected timeline after rows err")
+		}
+
+		s.hooks.queryIt = origQueryIt
+		tl, err := s.Timeline(first, 5, 5)
+		if err != nil {
+			t.Fatalf("timeline reverse branch run: %v", err)
+		}
+		if len(tl.After) == 0 {
+			t.Fatalf("expected timeline after entries")
+		}
+	})
+
+	t.Run("format context and stats remaining branches", func(t *testing.T) {
+		s := newTestStore(t)
+		if err := s.CreateSession("s-c", "ancora", "/tmp/ancora"); err != nil {
+			t.Fatalf("create session: %v", err)
+		}
+		if _, err := s.AddObservation(AddObservationParams{SessionID: "s-c", Type: "note", Title: "n", Content: "n", Workspace: "ancora"}); err != nil {
+			t.Fatalf("add obs: %v", err)
+		}
+
+		origQueryIt := s.hooks.queryIt
+		s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+			if strings.Contains(query, "FROM observations o") && strings.Contains(query, "WHERE o.deleted_at IS NULL") {
+				return nil, errors.New("forced recent observations error")
+			}
+			return origQueryIt(db, query, args...)
+		}
+		if _, err := s.FormatContext("ancora", "project"); err == nil {
+			t.Fatalf("expected format context observations error")
+		}
+
+		s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+			if strings.Contains(query, "GROUP BY project") {
+				return nil, errors.New("forced stats query error")
+			}
+			return origQueryIt(db, query, args...)
+		}
+		if _, err := s.Stats(); err != nil {
+			t.Fatalf("stats should swallow project query errors: %v", err)
+		}
+
+		if err := s.EndSession("s-c", "has summary"); err != nil {
+			t.Fatalf("end session: %v", err)
+		}
+		s.hooks.queryIt = origQueryIt
+		ctx, err := s.FormatContext("ancora", "project")
+		if err != nil {
+			t.Fatalf("format context with summary: %v", err)
+		}
+		if !strings.Contains(ctx, "has summary") {
+			t.Fatalf("expected session summary included in context")
+		}
+	})
+
+	t.Run("helper query errors and legacy migration late-stage failures", func(t *testing.T) {
+		s := newTestStore(t)
+		if err := s.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+		if _, err := s.GetSyncedChunks(); err == nil {
+			t.Fatalf("expected synced chunks query error")
+		}
+		if _, err := s.queryObservations("SELECT id FROM observations"); err == nil {
+			t.Fatalf("expected queryObservations query error")
+		}
+		if err := s.addColumnIfNotExists("observations", "x", "TEXT"); err == nil {
+			t.Fatalf("expected addColumn query error")
+		}
+		if err := s.migrateLegacyObservationsTable(); err == nil {
+			t.Fatalf("expected legacy migrate query error")
+		}
+
+		s2 := newTestStore(t)
+		if _, err := s2.db.Exec(`
+			DROP TRIGGER IF EXISTS obs_fts_insert;
+			DROP TRIGGER IF EXISTS obs_fts_update;
+			DROP TRIGGER IF EXISTS obs_fts_delete;
+			DROP TABLE IF EXISTS observations_fts;
+			DROP TABLE observations;
+			INSERT OR IGNORE INTO sessions (id, project, directory) VALUES ('s1', 'ancora', '/tmp/ancora');
+			CREATE TABLE observations (
+				id INT,
+				session_id TEXT,
+				type TEXT,
+				title TEXT,
+				content TEXT,
+				tool_name TEXT,
+				project TEXT,
+				scope TEXT,
+				topic_key TEXT,
+				normalized_hash TEXT,
+				revision_count INTEGER,
+				duplicate_count INTEGER,
+				last_seen_at TEXT,
+				created_at TEXT,
+				updated_at TEXT,
+				deleted_at TEXT
+			);
+			INSERT INTO observations (id, session_id, type, title, content, project, created_at, updated_at)
+			VALUES (1, 's1', 'bugfix', 'legacy', 'legacy row', 'ancora', datetime('now'), datetime('now'));
+		`); err != nil {
+			t.Fatalf("prepare legacy table: %v", err)
+		}
+
+		lateFail := []string{"INSERT INTO observations_migrated", "DROP TABLE observations", "RENAME TO observations", "CREATE VIRTUAL TABLE observations_fts"}
+		for _, needle := range lateFail {
+			t.Run(needle, func(t *testing.T) {
+				s3 := newTestStore(t)
+				if _, err := s3.db.Exec(`
+					DROP TRIGGER IF EXISTS obs_fts_insert;
+					DROP TRIGGER IF EXISTS obs_fts_update;
+					DROP TRIGGER IF EXISTS obs_fts_delete;
+					DROP TABLE IF EXISTS observations_fts;
+					DROP TABLE observations;
+					INSERT OR IGNORE INTO sessions (id, project, directory) VALUES ('s1', 'ancora', '/tmp/ancora');
+					CREATE TABLE observations (
+						id INT,
+						session_id TEXT,
+						type TEXT,
+						title TEXT,
+						content TEXT,
+						tool_name TEXT,
+						project TEXT,
+						scope TEXT,
+						topic_key TEXT,
+						normalized_hash TEXT,
+						revision_count INTEGER,
+						duplicate_count INTEGER,
+						last_seen_at TEXT,
+						created_at TEXT,
+						updated_at TEXT,
+						deleted_at TEXT
+					);
+					INSERT INTO observations (id, session_id, type, title, content, project, created_at, updated_at)
+					VALUES (1, 's1', 'bugfix', 'legacy', 'legacy row', 'ancora', datetime('now'), datetime('now'));
+				`); err != nil {
+					t.Fatalf("prepare legacy schema: %v", err)
+				}
+
+				origExec := s3.hooks.exec
+				s3.hooks.exec = func(db execer, query string, args ...any) (sql.Result, error) {
+					if strings.Contains(query, needle) {
+						return nil, errors.New("forced legacy late failure")
+					}
+					return origExec(db, query, args...)
+				}
+				if err := s3.migrateLegacyObservationsTable(); err == nil {
+					t.Fatalf("expected legacy migrate error for %q", needle)
+				}
+			})
+		}
+	})
+}
+
+// ─── Issue #25: Session collision regression tests ──────────────────────────
+
+func TestCreateSessionUpsertsEmptyProjectAndDirectory(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create session with empty project/directory (simulates first MCP call without context)
+	if err := s.CreateSession("sess-upsert", "", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Second call with real project/directory should fill in the blanks.
+	// Project names are normalized to lowercase, so "projectA" becomes "projecta".
+	if err := s.CreateSession("sess-upsert", "projectA", "/tmp/a"); err != nil {
+		t.Fatalf("upsert session: %v", err)
+	}
+
+	sess, err := s.GetSession("sess-upsert")
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if sess.Project != "projecta" {
+		t.Fatalf("expected project=projecta after upsert (normalized), got %q", sess.Project)
+	}
+	if sess.Directory != "/tmp/a" {
+		t.Fatalf("expected directory=/tmp/a after upsert, got %q", sess.Directory)
+	}
+}
+
+func TestCreateSessionDoesNotOverwriteExistingProject(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create session with project A (normalized to "projecta")
+	if err := s.CreateSession("sess-preserve", "projectA", "/tmp/a"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Second call with project B should NOT overwrite
+	if err := s.CreateSession("sess-preserve", "projectB", "/tmp/b"); err != nil {
+		t.Fatalf("upsert session: %v", err)
+	}
+
+	sess, err := s.GetSession("sess-preserve")
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	// Project names are normalized to lowercase, so "projectA" is stored as "projecta"
+	if sess.Project != "projecta" {
+		t.Fatalf("expected project=projecta (preserved, normalized), got %q", sess.Project)
+	}
+	if sess.Directory != "/tmp/a" {
+		t.Fatalf("expected directory=/tmp/a (preserved), got %q", sess.Directory)
+	}
+}
+
+func TestCreateSessionPartialUpsert(t *testing.T) {
+	s := newTestStore(t)
+
+	t.Run("fills directory when project already set", func(t *testing.T) {
+		if err := s.CreateSession("sess-partial-1", "myproject", ""); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		// Second call fills directory but project stays
+		if err := s.CreateSession("sess-partial-1", "other", "/new/dir"); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+		sess, err := s.GetSession("sess-partial-1")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if sess.Project != "myproject" {
+			t.Fatalf("project should be preserved, got %q", sess.Project)
+		}
+		if sess.Directory != "/new/dir" {
+			t.Fatalf("directory should be filled, got %q", sess.Directory)
+		}
+	})
+
+	t.Run("fills project when directory already set", func(t *testing.T) {
+		if err := s.CreateSession("sess-partial-2", "", "/existing/dir"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if err := s.CreateSession("sess-partial-2", "newproject", ""); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+		sess, err := s.GetSession("sess-partial-2")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if sess.Project != "newproject" {
+			t.Fatalf("project should be filled, got %q", sess.Project)
+		}
+		if sess.Directory != "/existing/dir" {
+			t.Fatalf("directory should be preserved, got %q", sess.Directory)
+		}
+	})
+
+	t.Run("both empty stays empty", func(t *testing.T) {
+		if err := s.CreateSession("sess-partial-3", "", ""); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if err := s.CreateSession("sess-partial-3", "", ""); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+		sess, err := s.GetSession("sess-partial-3")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if sess.Project != "" {
+			t.Fatalf("project should stay empty, got %q", sess.Project)
+		}
+		if sess.Directory != "" {
+			t.Fatalf("directory should stay empty, got %q", sess.Directory)
+		}
+	})
+}
+
+func TestTruncateUTF8(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		max  int
+		want string
+	}{
+		{name: "short ascii", in: "abc", max: 10, want: "abc"},
+		{name: "exact length", in: "hello", max: 5, want: "hello"},
+		{name: "long ascii", in: "abcdef", max: 3, want: "abc..."},
+		{name: "spanish accents", in: "Decisión de arquitectura", max: 8, want: "Decisión..."},
+		{name: "emoji", in: "🐛🔧🚀✨🎉💡", max: 3, want: "🐛🔧🚀..."},
+		{name: "mixed ascii and multibyte", in: "café☕latte", max: 5, want: "café☕..."},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := truncate(tc.in, tc.max)
+			if got != tc.want {
+				t.Fatalf("truncate(%q, %d) = %q, want %q", tc.in, tc.max, got, tc.want)
+			}
+		})
+	}
+}
+
+// ─── Project Enrollment CRUD Tests ───────────────────────────────────────────
+
+func TestEnrollProjectBasic(t *testing.T) {
+	s := newTestStore(t)
+
+	// Enroll a project.
+	if err := s.EnrollProject("ancora"); err != nil {
+		t.Fatalf("enroll project: %v", err)
+	}
+
+	// Verify it shows up in the list.
+	projects, err := s.ListEnrolledProjects()
+	if err != nil {
+		t.Fatalf("list enrolled projects: %v", err)
+	}
+	if len(projects) != 1 {
+		t.Fatalf("expected 1 enrolled project, got %d", len(projects))
+	}
+	if projects[0].Project != "ancora" {
+		t.Fatalf("expected project 'ancora', got %q", projects[0].Project)
+	}
+	if projects[0].EnrolledAt == "" {
+		t.Fatal("expected enrolled_at to be set")
+	}
+
+	// Verify IsProjectEnrolled returns true.
+	enrolled, err := s.IsProjectEnrolled("ancora")
+	if err != nil {
+		t.Fatalf("is project enrolled: %v", err)
+	}
+	if !enrolled {
+		t.Fatal("expected project to be enrolled")
+	}
+}
+
+func TestEnrollProjectIdempotent(t *testing.T) {
+	s := newTestStore(t)
+
+	// Enroll twice — should not error.
+	if err := s.EnrollProject("ancora"); err != nil {
+		t.Fatalf("first enroll: %v", err)
+	}
+	if err := s.EnrollProject("ancora"); err != nil {
+		t.Fatalf("second enroll (idempotent): %v", err)
+	}
+
+	// Should still be exactly one row.
+	projects, err := s.ListEnrolledProjects()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(projects) != 1 {
+		t.Fatalf("expected 1 enrolled project after double-enroll, got %d", len(projects))
+	}
+}
+
+func TestEnrollProjectBackfillsHistoricalMutations(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.db.Exec(
+		`INSERT INTO sessions (id, project, directory, ended_at, summary) VALUES (?, ?, ?, datetime('now'), ?)`,
+		"legacy-session", "legacy-proj", "/tmp/legacy", "done",
+	); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	if _, err := s.db.Exec(
+		`INSERT INTO observations (sync_id, session_id, type, title, content, workspace, visibility, normalized_hash, revision_count, duplicate_count, last_seen_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), datetime('now'))`,
+		"obs-legacy", "legacy-session", "decision", "Legacy obs", "Historical content", "legacy-proj", "project", hashNormalized("Historical content"),
+	); err != nil {
+		t.Fatalf("insert observation: %v", err)
+	}
+
+	if _, err := s.db.Exec(
+		`INSERT INTO user_prompts (sync_id, session_id, content, project) VALUES (?, ?, ?, ?)`,
+		"prompt-legacy", "legacy-session", "What happened before enterprise?", "legacy-proj",
+	); err != nil {
+		t.Fatalf("insert prompt: %v", err)
+	}
+
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_mutations`).Scan(&before); err != nil {
+		t.Fatalf("count mutations before enroll: %v", err)
+	}
+	if before != 0 {
+		t.Fatalf("expected 0 sync mutations before enroll, got %d", before)
+	}
+
+	if err := s.EnrollProject("legacy-proj"); err != nil {
+		t.Fatalf("enroll project: %v", err)
+	}
+
+	mutations, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 10)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	if len(mutations) != 3 {
+		t.Fatalf("expected 3 backfilled mutations, got %d", len(mutations))
+	}
+
+	expected := map[string]string{
+		SyncEntitySession:     "legacy-session",
+		SyncEntityObservation: "obs-legacy",
+		SyncEntityPrompt:      "prompt-legacy",
+	}
+	for _, mutation := range mutations {
+		entityKey, ok := expected[mutation.Entity]
+		if !ok {
+			t.Fatalf("unexpected mutation entity %q", mutation.Entity)
+		}
+		if mutation.EntityKey != entityKey {
+			t.Fatalf("expected entity_key %q for %s, got %q", entityKey, mutation.Entity, mutation.EntityKey)
+		}
+		if mutation.Project != "legacy-proj" {
+			t.Fatalf("expected project legacy-proj, got %q", mutation.Project)
+		}
+	}
+	state, err := s.GetSyncState(DefaultSyncTargetKey)
+	if err != nil {
+		t.Fatalf("get sync state: %v", err)
+	}
+	if state.LastEnqueuedSeq != 3 {
+		t.Fatalf("expected last_enqueued_seq 3 after backfill, got %d", state.LastEnqueuedSeq)
+	}
+}
+
+func TestEnrollProjectBackfillIsIdempotentAndSkipsExistingMutations(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.db.Exec(
+		`INSERT INTO sessions (id, project, directory) VALUES (?, ?, ?)`,
+		"legacy-session", "legacy-proj", "/tmp/legacy",
+	); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	if _, err := s.db.Exec(
+		`INSERT INTO observations (sync_id, session_id, type, title, content, project, scope, normalized_hash, revision_count, duplicate_count, last_seen_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), datetime('now'))`,
+		"obs-legacy", "legacy-session", "decision", "Legacy obs", "Historical content", "legacy-proj", "project", hashNormalized("Historical content"),
+	); err != nil {
+		t.Fatalf("insert observation: %v", err)
+	}
+
+	if _, err := s.db.Exec(
+		`INSERT INTO user_prompts (sync_id, session_id, content, project) VALUES (?, ?, ?, ?)`,
+		"prompt-legacy", "legacy-session", "Historical prompt", "legacy-proj",
+	); err != nil {
+		t.Fatalf("insert prompt: %v", err)
+	}
+
+	if _, err := s.db.Exec(
+		`INSERT INTO sync_mutations (target_key, entity, entity_key, op, payload, source, project)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		DefaultSyncTargetKey, SyncEntityObservation, "obs-legacy", SyncOpUpsert, `{"sync_id":"obs-legacy","session_id":"legacy-session","project":"legacy-proj"}`, SyncSourceLocal, "legacy-proj",
+	); err != nil {
+		t.Fatalf("insert existing mutation: %v", err)
+	}
+
+	if err := s.EnrollProject("legacy-proj"); err != nil {
+		t.Fatalf("first enroll: %v", err)
+	}
+
+	var afterFirst int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_mutations`).Scan(&afterFirst); err != nil {
+		t.Fatalf("count after first enroll: %v", err)
+	}
+	if afterFirst != 3 {
+		t.Fatalf("expected 3 total mutations after first enroll, got %d", afterFirst)
+	}
+
+	var observationMutations int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_mutations WHERE entity = ? AND entity_key = ?`, SyncEntityObservation, "obs-legacy").Scan(&observationMutations); err != nil {
+		t.Fatalf("count observation mutations: %v", err)
+	}
+	if observationMutations != 1 {
+		t.Fatalf("expected existing observation mutation to remain single, got %d rows", observationMutations)
+	}
+
+	if err := s.EnrollProject("legacy-proj"); err != nil {
+		t.Fatalf("second enroll: %v", err)
+	}
+
+	var afterSecond int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_mutations`).Scan(&afterSecond); err != nil {
+		t.Fatalf("count after second enroll: %v", err)
+	}
+	if afterSecond != afterFirst {
+		t.Fatalf("expected no duplicate backfill on re-enroll, got %d mutations after second enroll vs %d after first", afterSecond, afterFirst)
+	}
+}
+
+func TestNewRepairsAlreadyEnrolledProjectsMissingHistoricalSyncMutations(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "ancora.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	obsHash := hashNormalized("Historical content")
+	_, err = db.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			project TEXT NOT NULL,
+			directory TEXT NOT NULL,
+			started_at TEXT NOT NULL DEFAULT (datetime('now')),
+			ended_at TEXT,
+			summary TEXT
+		);
+		CREATE TABLE observations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			sync_id TEXT,
+			session_id TEXT NOT NULL,
+			type TEXT NOT NULL,
+			title TEXT NOT NULL,
+			content TEXT NOT NULL,
+			tool_name TEXT,
+			project TEXT,
+			scope TEXT NOT NULL DEFAULT 'project',
+			topic_key TEXT,
+			normalized_hash TEXT,
+			revision_count INTEGER NOT NULL DEFAULT 1,
+			duplicate_count INTEGER NOT NULL DEFAULT 1,
+			last_seen_at TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			deleted_at TEXT,
+			FOREIGN KEY (session_id) REFERENCES sessions(id)
+		);
+		CREATE TABLE user_prompts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			sync_id TEXT,
+			session_id TEXT NOT NULL,
+			content TEXT NOT NULL,
+			project TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (session_id) REFERENCES sessions(id)
+		);
+		CREATE TABLE sync_state (
+			target_key TEXT PRIMARY KEY,
+			lifecycle TEXT NOT NULL DEFAULT 'idle',
+			last_enqueued_seq INTEGER NOT NULL DEFAULT 0,
+			last_acked_seq INTEGER NOT NULL DEFAULT 0,
+			last_pulled_seq INTEGER NOT NULL DEFAULT 0,
+			consecutive_failures INTEGER NOT NULL DEFAULT 0,
+			backoff_until TEXT,
+			lease_owner TEXT,
+			lease_until TEXT,
+			last_error TEXT,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+		CREATE TABLE sync_mutations (
+			seq INTEGER PRIMARY KEY AUTOINCREMENT,
+			target_key TEXT NOT NULL,
+			entity TEXT NOT NULL,
+			entity_key TEXT NOT NULL,
+			op TEXT NOT NULL,
+			payload TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT 'local',
+			occurred_at TEXT NOT NULL DEFAULT (datetime('now')),
+			acked_at TEXT,
+			project TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY (target_key) REFERENCES sync_state(target_key)
+		);
+		CREATE TABLE sync_enrolled_projects (
+			project TEXT PRIMARY KEY,
+			enrolled_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+		INSERT INTO sessions (id, project, directory, summary) VALUES ('legacy-session', 'legacy-proj', '/tmp/legacy', 'done');
+		INSERT INTO observations (sync_id, session_id, type, title, content, project, scope, normalized_hash, revision_count, duplicate_count, last_seen_at, updated_at)
+		VALUES ('obs-legacy', 'legacy-session', 'decision', 'Legacy obs', 'Historical content', 'legacy-proj', 'project', ?, 1, 1, datetime('now'), datetime('now'));
+		INSERT INTO user_prompts (sync_id, session_id, content, project) VALUES ('prompt-legacy', 'legacy-session', 'Historical prompt', 'legacy-proj');
+		INSERT INTO sync_state (target_key, lifecycle, updated_at) VALUES (?, 'idle', datetime('now'));
+		INSERT INTO sync_enrolled_projects (project) VALUES ('legacy-proj');
+	`, obsHash, DefaultSyncTargetKey)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("seed legacy db: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	cfg := mustDefaultConfig(t)
+	cfg.DataDir = dataDir
+
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new store after enrolled legacy state: %v", err)
+	}
+
+	mutations, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 10)
+	if err != nil {
+		_ = s.Close()
+		t.Fatalf("list pending after repair: %v", err)
+	}
+	if len(mutations) != 3 {
+		_ = s.Close()
+		t.Fatalf("expected 3 repaired mutations, got %d", len(mutations))
+	}
+
+	state, err := s.GetSyncState(DefaultSyncTargetKey)
+	if err != nil {
+		_ = s.Close()
+		t.Fatalf("get sync state after repair: %v", err)
+	}
+	if state.LastEnqueuedSeq != 3 {
+		_ = s.Close()
+		t.Fatalf("expected last_enqueued_seq 3 after automatic repair, got %d", state.LastEnqueuedSeq)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("close repaired store: %v", err)
+	}
+
+	s, err = New(cfg)
+	if err != nil {
+		t.Fatalf("reopen repaired store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_mutations`).Scan(&count); err != nil {
+		t.Fatalf("count repaired mutations after reopen: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("expected repair to stay idempotent across reopen, got %d sync mutations", count)
+	}
+}
+
+func TestEnrollProjectEmptyNameReturnsError(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.EnrollProject(""); err == nil {
+		t.Fatal("expected error when enrolling empty project name")
+	}
+}
+
+func TestUnenrollProjectBasic(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.EnrollProject("ancora"); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+
+	// Unenroll.
+	if err := s.UnenrollProject("ancora"); err != nil {
+		t.Fatalf("unenroll: %v", err)
+	}
+
+	// Should be gone.
+	enrolled, err := s.IsProjectEnrolled("ancora")
+	if err != nil {
+		t.Fatalf("is enrolled after unenroll: %v", err)
+	}
+	if enrolled {
+		t.Fatal("expected project to be unenrolled")
+	}
+
+	projects, err := s.ListEnrolledProjects()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(projects) != 0 {
+		t.Fatalf("expected 0 enrolled projects after unenroll, got %d", len(projects))
+	}
+}
+
+func TestUnenrollProjectIdempotent(t *testing.T) {
+	s := newTestStore(t)
+
+	// Unenroll a project that was never enrolled — should not error.
+	if err := s.UnenrollProject("nonexistent"); err != nil {
+		t.Fatalf("unenroll non-enrolled project should be idempotent: %v", err)
+	}
+}
+
+func TestUnenrollProjectEmptyNameReturnsError(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UnenrollProject(""); err == nil {
+		t.Fatal("expected error when unenrolling empty project name")
+	}
+}
+
+func TestIsProjectEnrolledReturnsFalseForUnknown(t *testing.T) {
+	s := newTestStore(t)
+
+	enrolled, err := s.IsProjectEnrolled("unknown-project")
+	if err != nil {
+		t.Fatalf("is enrolled: %v", err)
+	}
+	if enrolled {
+		t.Fatal("expected false for unknown project")
+	}
+}
+
+func TestListEnrolledProjectsEmpty(t *testing.T) {
+	s := newTestStore(t)
+
+	projects, err := s.ListEnrolledProjects()
+	if err != nil {
+		t.Fatalf("list enrolled projects: %v", err)
+	}
+	if projects != nil {
+		t.Fatalf("expected nil for empty list, got %v", projects)
+	}
+}
+
+func TestListEnrolledProjectsAlphabeticalOrder(t *testing.T) {
+	s := newTestStore(t)
+
+	// Enroll in non-alphabetical order.
+	for _, p := range []string{"zebra", "alpha", "mango"} {
+		if err := s.EnrollProject(p); err != nil {
+			t.Fatalf("enroll %q: %v", p, err)
+		}
+	}
+
+	projects, err := s.ListEnrolledProjects()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(projects) != 3 {
+		t.Fatalf("expected 3 projects, got %d", len(projects))
+	}
+	expected := []string{"alpha", "mango", "zebra"}
+	for i, ep := range projects {
+		if ep.Project != expected[i] {
+			t.Fatalf("position %d: expected %q, got %q", i, expected[i], ep.Project)
+		}
+	}
+}
+
+func TestSyncMutationProjectColumnExists(t *testing.T) {
+	s := newTestStore(t)
+
+	// Verify the project column exists on sync_mutations by inserting a row.
+	_, err := s.db.Exec(
+		`INSERT INTO sync_mutations (target_key, entity, entity_key, op, payload, source, project)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		DefaultSyncTargetKey, "session", "test-key", SyncOpUpsert, `{"project":"myproj"}`, SyncSourceLocal, "myproj",
+	)
+	if err != nil {
+		t.Fatalf("insert sync_mutation with project: %v", err)
+	}
+
+	// Read it back and verify project is populated.
+	var project string
+	if err := s.db.QueryRow(`SELECT project FROM sync_mutations WHERE entity_key = ?`, "test-key").Scan(&project); err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+	if project != "myproj" {
+		t.Fatalf("expected project 'myproj', got %q", project)
+	}
+}
+
+func TestSyncMutationProjectBackfill(t *testing.T) {
+	s := newTestStore(t)
+
+	// Insert a mutation that simulates a pre-migration row (project is empty, but payload has it).
+	// The backfill runs during schema init, so we test it by inserting directly then re-running.
+	// Since the store already ran migrations, let's verify backfill logic by inserting a new row
+	// with empty project and manually running the backfill.
+	_, err := s.db.Exec(
+		`INSERT INTO sync_mutations (target_key, entity, entity_key, op, payload, source, project)
+		 VALUES (?, ?, ?, ?, ?, ?, '')`,
+		DefaultSyncTargetKey, "observation", "backfill-key", SyncOpUpsert, `{"project":"backfilled"}`, SyncSourceLocal,
+	)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// Run the backfill manually.
+	_, err = s.db.Exec(`
+		UPDATE sync_mutations
+		SET project = COALESCE(json_extract(payload, '$.project'), '')
+		WHERE project = '' AND payload != ''
+	`)
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+
+	var project string
+	if err := s.db.QueryRow(`SELECT project FROM sync_mutations WHERE entity_key = ?`, "backfill-key").Scan(&project); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if project != "backfilled" {
+		t.Fatalf("expected backfilled project 'backfilled', got %q", project)
+	}
+}
+
+func TestListPendingSyncMutationsIncludesProject(t *testing.T) {
+	s := newTestStore(t)
+
+	// Enroll the project so mutations are visible in ListPendingSyncMutations.
+	if err := s.EnrollProject("my-project"); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+
+	if err := s.CreateSession("proj-session", "my-project", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID:  "proj-session",
+		Type:       "decision",
+		Title:      "Test obs",
+		Content:    "Content",
+		Workspace:  "my-project",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	mutations, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 10)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+
+	// There should be mutations (session create + observation create at minimum).
+	if len(mutations) == 0 {
+		t.Fatal("expected at least one pending mutation")
+	}
+
+	// Phase 3: Verify the Project field is populated at enqueue time.
+	foundProject := false
+	for _, m := range mutations {
+		if m.Project == "my-project" {
+			foundProject = true
+			break
+		}
+	}
+	if !foundProject {
+		t.Fatal("expected at least one mutation with project='my-project'")
+	}
+}
+
+// ─── Phase 3: extractProjectFromPayload ──────────────────────────────────────
+
+func TestExtractProjectFromSessionPayload(t *testing.T) {
+	p := syncSessionPayload{Project: "acme"}
+	got := extractProjectFromPayload(p)
+	if got != "acme" {
+		t.Fatalf("expected 'acme', got %q", got)
+	}
+}
+
+func TestExtractProjectFromObservationPayload(t *testing.T) {
+	proj := "obs-project"
+	p := syncObservationPayload{SyncID: "obs-1", Workspace: &proj}
+	got := extractProjectFromPayload(p)
+	if got != "obs-project" {
+		t.Fatalf("expected 'obs-project', got %q", got)
+	}
+}
+
+func TestExtractProjectFromObservationPayloadNil(t *testing.T) {
+	p := syncObservationPayload{SyncID: "obs-1", Workspace: nil}
+	got := extractProjectFromPayload(p)
+	if got != "" {
+		t.Fatalf("expected empty string, got %q", got)
+	}
+}
+
+func TestExtractProjectFromPromptPayload(t *testing.T) {
+	proj := "prompt-project"
+	p := syncPromptPayload{Project: &proj}
+	got := extractProjectFromPayload(p)
+	if got != "prompt-project" {
+		t.Fatalf("expected 'prompt-project', got %q", got)
+	}
+}
+
+func TestExtractProjectFromPromptPayloadNil(t *testing.T) {
+	p := syncPromptPayload{Project: nil}
+	got := extractProjectFromPayload(p)
+	if got != "" {
+		t.Fatalf("expected empty string, got %q", got)
+	}
+}
+
+func TestExtractProjectFromUnknownPayloadFallback(t *testing.T) {
+	// Unknown struct with a project field — uses JSON fallback.
+	p := struct {
+		Project string `json:"project"`
+		Other   string `json:"other"`
+	}{Project: "fallback-proj", Other: "x"}
+	got := extractProjectFromPayload(p)
+	if got != "fallback-proj" {
+		t.Fatalf("expected 'fallback-proj', got %q", got)
+	}
+}
+
+func TestExtractProjectFromPayloadWithoutProjectField(t *testing.T) {
+	// Unknown struct without a project field — returns empty.
+	p := struct {
+		Name string `json:"name"`
+	}{Name: "test"}
+	got := extractProjectFromPayload(p)
+	if got != "" {
+		t.Fatalf("expected empty string, got %q", got)
+	}
+}
+
+// ─── Phase 3: enqueueSyncMutationTx populates project column ────────────────
+
+func TestEnqueueSyncMutationPopulatesProjectFromSessionPayload(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.CreateSession("enq-session", "enqueued-project", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// CreateSession enqueues a sync mutation internally. Check the project column.
+	var project string
+	err := s.db.QueryRow(
+		`SELECT project FROM sync_mutations WHERE entity = ? AND entity_key = ?`,
+		SyncEntitySession, "enq-session",
+	).Scan(&project)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if project != "enqueued-project" {
+		t.Fatalf("expected project='enqueued-project', got %q", project)
+	}
+}
+
+func TestEnqueueSyncMutationPopulatesProjectFromObservationPayload(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.CreateSession("obs-enq", "obs-proj", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID: "obs-enq",
+		Type:      "decision",
+		Title:     "Test",
+		Content:   "Content",
+		Workspace: "obs-proj",
+	})
+	if err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	// Check the observation mutation's project column.
+	var project string
+	err = s.db.QueryRow(
+		`SELECT project FROM sync_mutations WHERE entity = ? ORDER BY seq DESC LIMIT 1`,
+		SyncEntityObservation,
+	).Scan(&project)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if project != "obs-proj" {
+		t.Fatalf("expected project='obs-proj', got %q", project)
+	}
+}
+
+func TestEnqueueSyncMutationPopulatesProjectFromPromptPayload(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.CreateSession("prompt-enq", "prompt-proj", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	_, err := s.AddPrompt(AddPromptParams{
+		SessionID: "prompt-enq",
+		Content:   "What did we do?",
+		Project:   "prompt-proj",
+	})
+	if err != nil {
+		t.Fatalf("add prompt: %v", err)
+	}
+
+	var project string
+	err = s.db.QueryRow(
+		`SELECT project FROM sync_mutations WHERE entity = ? ORDER BY seq DESC LIMIT 1`,
+		SyncEntityPrompt,
+	).Scan(&project)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if project != "prompt-proj" {
+		t.Fatalf("expected project='prompt-proj', got %q", project)
+	}
+}
+
+// ─── Phase 4: ListPendingSyncMutations enrollment filtering ──────────────────
+
+func TestListPendingFiltersNonEnrolledProjects(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s-enrolled", "enrolled-proj", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := s.CreateSession("s-not-enrolled", "other-proj", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Enroll only "enrolled-proj".
+	if err := s.EnrollProject("enrolled-proj"); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+
+	mutations, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+
+	// Only enrolled-proj mutations should appear.
+	for _, m := range mutations {
+		if m.Project == "other-proj" {
+			t.Fatalf("non-enrolled project 'other-proj' should not appear in pending mutations")
+		}
+	}
+
+	foundEnrolled := false
+	for _, m := range mutations {
+		if m.Project == "enrolled-proj" {
+			foundEnrolled = true
+			break
+		}
+	}
+	if !foundEnrolled {
+		t.Fatal("expected enrolled-proj mutations to appear")
+	}
+}
+
+func TestListPendingReturnsNoMutationsWhenNoneEnrolled(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s-no-enroll", "some-proj", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	mutations, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+
+	// No projects enrolled → no mutations (all have project != '').
+	if len(mutations) != 0 {
+		t.Fatalf("expected 0 mutations when no projects enrolled, got %d", len(mutations))
+	}
+}
+
+// ─── Phase 4: SkipAckNonEnrolledMutations ────────────────────────────────────
+
+func TestSkipAckNonEnrolledMutationsBasic(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("skip-session", "skip-proj", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Do NOT enroll "skip-proj" → mutations should be skip-acked.
+	skipped, err := s.SkipAckNonEnrolledMutations(DefaultSyncTargetKey)
+	if err != nil {
+		t.Fatalf("skip-ack: %v", err)
+	}
+	if skipped == 0 {
+		t.Fatal("expected at least one mutation to be skip-acked")
+	}
+
+	// After skip-ack, there should be no pending mutations left.
+	mutations, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	if len(mutations) != 0 {
+		t.Fatalf("expected 0 pending mutations after skip-ack, got %d", len(mutations))
+	}
+}
+
+func TestSkipAckPreservesEnrolledProjectMutations(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.EnrollProject("enrolled"); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+
+	if err := s.CreateSession("s-enrolled", "enrolled", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := s.CreateSession("s-not-enrolled", "not-enrolled", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Count total pending before skip-ack.
+	var totalBefore int
+	s.db.QueryRow(`SELECT COUNT(*) FROM sync_mutations WHERE acked_at IS NULL`).Scan(&totalBefore)
+
+	skipped, err := s.SkipAckNonEnrolledMutations(DefaultSyncTargetKey)
+	if err != nil {
+		t.Fatalf("skip-ack: %v", err)
+	}
+	if skipped == 0 {
+		t.Fatal("expected at least one mutation to be skip-acked for 'not-enrolled'")
+	}
+
+	// Remaining pending should be only "enrolled" mutations.
+	mutations, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	for _, m := range mutations {
+		if m.Project == "not-enrolled" {
+			t.Fatal("skip-acked mutation still appears as pending")
+		}
+	}
+	if len(mutations) == 0 {
+		t.Fatal("expected enrolled-project mutations to remain")
+	}
+}
+
+// ─── Phase 5: Empty/global project always syncs ──────────────────────────────
+
+func TestEmptyProjectMutationsAlwaysSync(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create a session with empty project (global).
+	if err := s.CreateSession("global-session", "", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// No projects enrolled, but empty-project mutations should still appear.
+	mutations, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+
+	if len(mutations) == 0 {
+		t.Fatal("expected empty-project mutations to always sync regardless of enrollment")
+	}
+
+	// Verify they have project = ''.
+	for _, m := range mutations {
+		if m.Project != "" {
+			t.Fatalf("expected empty project, got %q", m.Project)
+		}
+	}
+}
+
+func TestSkipAckDoesNotAffectEmptyProjectMutations(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create a session with empty project (global).
+	if err := s.CreateSession("global-session-2", "", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Count pending before skip-ack.
+	beforeMutations, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	beforeCount := len(beforeMutations)
+
+	// Skip-ack should not affect empty-project mutations.
+	skipped, err := s.SkipAckNonEnrolledMutations(DefaultSyncTargetKey)
+	if err != nil {
+		t.Fatalf("skip-ack: %v", err)
+	}
+	if skipped != 0 {
+		t.Fatalf("expected 0 mutations to be skip-acked (all empty project), got %d", skipped)
+	}
+
+	// Verify count unchanged.
+	afterMutations, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	if len(afterMutations) != beforeCount {
+		t.Fatalf("expected %d mutations after skip-ack, got %d", beforeCount, len(afterMutations))
+	}
+}
+
+func TestMixedEnrolledAndEmptyProjectMutations(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.EnrollProject("enrolled-mix"); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+
+	// Create sessions with different project states.
+	if err := s.CreateSession("mix-enrolled", "enrolled-mix", "/tmp"); err != nil {
+		t.Fatalf("create enrolled session: %v", err)
+	}
+	if err := s.CreateSession("mix-global", "", "/tmp"); err != nil {
+		t.Fatalf("create global session: %v", err)
+	}
+	if err := s.CreateSession("mix-unenrolled", "unenrolled-mix", "/tmp"); err != nil {
+		t.Fatalf("create unenrolled session: %v", err)
+	}
+
+	mutations, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+
+	// Should have enrolled-mix and empty-project mutations, but NOT unenrolled-mix.
+	var hasEnrolled, hasGlobal bool
+	for _, m := range mutations {
+		if m.Project == "unenrolled-mix" {
+			t.Fatal("unenrolled project mutations should not appear")
+		}
+		if m.Project == "enrolled-mix" {
+			hasEnrolled = true
+		}
+		if m.Project == "" {
+			hasGlobal = true
+		}
+	}
+	if !hasEnrolled {
+		t.Fatal("expected enrolled-mix mutations to appear")
+	}
+	if !hasGlobal {
+		t.Fatal("expected empty-project (global) mutations to appear")
+	}
+}
+
+// ─── Phase 6: personal scope — hard sync block ───────────────────────────────
+//
+// Observations with scope=personal must NEVER be enqueued in sync_mutations,
+// even if their project is enrolled for Syfra Cloud sync.
+// This is the security boundary: personal life knowledge (finance, health, goals)
+// must never leave the local device.
+
+func TestPersonalScopeNeverEnqueued(t *testing.T) {
+	s := newTestStore(t)
+
+	// Enroll the project — sync would normally apply.
+	if err := s.EnrollProject("my-project"); err != nil {
+		t.Fatalf("enroll project: %v", err)
+	}
+
+	sessionID := "sess-personal-block"
+	if err := s.CreateSession(sessionID, "my-project", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Drain the session-creation mutation so it doesn't affect our count.
+	mutations, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100)
+	if err != nil {
+		t.Fatalf("list before save: %v", err)
+	}
+	beforeCount := len(mutations)
+
+	// Save a personal-scope observation under an enrolled project.
+	_, err = s.AddObservation(AddObservationParams{
+		SessionID:  sessionID,
+		Type:       "manual",
+		Title:      "My budget plan",
+		Content:    "Personal finance notes",
+		Workspace:  "my-project",
+		Visibility: "personal",
+	})
+	if err != nil {
+		t.Fatalf("add personal observation: %v", err)
+	}
+
+	// Mutation count must not have increased.
+	after, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100)
+	if err != nil {
+		t.Fatalf("list after save: %v", err)
+	}
+	if len(after) != beforeCount {
+		t.Fatalf("personal observation must not create sync mutations: before=%d after=%d", beforeCount, len(after))
+	}
+}
+
+func TestPersonalScopeUpdateNeverEnqueued(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.EnrollProject("my-project"); err != nil {
+		t.Fatalf("enroll project: %v", err)
+	}
+
+	sessionID := "sess-personal-update"
+	if err := s.CreateSession(sessionID, "my-project", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	id, err := s.AddObservation(AddObservationParams{
+		SessionID:  sessionID,
+		Type:       "manual",
+		Title:      "Health goal",
+		Content:    "Run 5km per week",
+		Workspace:  "my-project",
+		Visibility: "personal",
+	})
+	if err != nil {
+		t.Fatalf("add personal observation: %v", err)
+	}
+
+	// Drain mutations accumulated so far.
+	mutations, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100)
+	if err != nil {
+		t.Fatalf("list before update: %v", err)
+	}
+	for _, m := range mutations {
+		if m.Entity == SyncEntityObservation {
+			t.Fatalf("personal observation must not produce sync mutation on save, got entity=%s", m.Entity)
+		}
+	}
+	beforeCount := len(mutations)
+
+	// Update the personal observation.
+	newContent := "Run 10km per week"
+	_, err = s.UpdateObservation(id, UpdateObservationParams{Content: &newContent})
+	if err != nil {
+		t.Fatalf("update personal observation: %v", err)
+	}
+
+	after, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100)
+	if err != nil {
+		t.Fatalf("list after update: %v", err)
+	}
+	if len(after) != beforeCount {
+		t.Fatalf("personal observation update must not create sync mutations: before=%d after=%d", beforeCount, len(after))
+	}
+}
+
+func TestProjectScopeEnqueuedWhenEnrolled(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.EnrollProject("work-project"); err != nil {
+		t.Fatalf("enroll project: %v", err)
+	}
+
+	sessionID := "sess-project-enrolled"
+	if err := s.CreateSession(sessionID, "work-project", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Drain session mutation.
+	if _, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID:  sessionID,
+		Type:       "decision",
+		Title:      "Use clean architecture",
+		Content:    "Enforce layered boundaries",
+		Workspace:  "work-project",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add project observation: %v", err)
+	}
+
+	after, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100)
+	if err != nil {
+		t.Fatalf("list after save: %v", err)
+	}
+
+	hasObsMutation := false
+	for _, m := range after {
+		if m.Entity == SyncEntityObservation && m.Project == "work-project" {
+			hasObsMutation = true
+			break
+		}
+	}
+	if !hasObsMutation {
+		t.Fatal("project-scope observation for enrolled project must produce a sync mutation")
+	}
+}
+
+func TestProjectScopeNotEnqueuedWhenNotEnrolled(t *testing.T) {
+	s := newTestStore(t)
+	// No enrollment.
+
+	sessionID := "sess-project-unenrolled"
+	if err := s.CreateSession(sessionID, "side-project", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID:  sessionID,
+		Type:       "manual",
+		Title:      "Side project note",
+		Content:    "Woodworking plans",
+		Workspace:  "side-project",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	// Mutation is enqueued (it goes into sync_mutations) but ListPendingSyncMutations
+	// must NOT return it because the project is not enrolled.
+	pending, err := s.ListPendingSyncMutations(DefaultSyncTargetKey, 100)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	for _, m := range pending {
+		if m.Entity == SyncEntityObservation && m.Project == "side-project" {
+			t.Fatal("unenrolled project observation must not appear in pending sync mutations")
+		}
+	}
+}
+
+// ─── MigrateProject ─────────────────────────────────────────────────────────
+
+func TestMigrateProject(t *testing.T) {
+	s := newTestStore(t)
+	old, new_ := "old-name", "new-name"
+
+	// Seed data under old project name
+	s.CreateSession("s1", old, "/tmp/old")
+	s.AddObservation(AddObservationParams{
+		SessionID: "s1", Type: "decision", Title: "test obs",
+		Content: "some content", Workspace: old, Visibility: "project",
+	})
+	s.AddPrompt(AddPromptParams{SessionID: "s1", Content: "test", Project: old})
+
+	// Run migration
+	result, err := s.MigrateProject(old, new_)
+	if err != nil {
+		t.Fatalf("MigrateWorkspace: %v", err)
+	}
+	if !result.Migrated {
+		t.Fatal("expected migration to happen")
+	}
+	if result.ObservationsUpdated != 1 {
+		t.Fatalf("expected 1 observation migrated, got %d", result.ObservationsUpdated)
+	}
+	if result.SessionsUpdated != 1 {
+		t.Fatalf("expected 1 session migrated, got %d", result.SessionsUpdated)
+	}
+	if result.PromptsUpdated != 1 {
+		t.Fatalf("expected 1 prompt migrated, got %d", result.PromptsUpdated)
+	}
+
+	// Verify old project has no records
+	obs, _ := s.RecentObservations(old, "", 10)
+	if len(obs) != 0 {
+		t.Fatalf("expected 0 observations under old name, got %d", len(obs))
+	}
+
+	// Verify new project has the records
+	obs, _ = s.RecentObservations(new_, "", 10)
+	if len(obs) != 1 {
+		t.Fatalf("expected 1 observation under new name, got %d", len(obs))
+	}
+
+	// Verify FTS search finds it under new project
+	results, _ := s.Search("test obs", SearchOptions{Workspace: new_, Limit: 10})
+	if len(results) != 1 {
+		t.Fatalf("expected FTS to find 1 result under new project, got %d", len(results))
+	}
+}
+
+func TestMigrateProjectNoOp(t *testing.T) {
+	s := newTestStore(t)
+
+	// No records under "nonexistent" — should be a no-op
+	result, err := s.MigrateProject("nonexistent", "anything")
+	if err != nil {
+		t.Fatalf("MigrateWorkspace: %v", err)
+	}
+	if result.Migrated {
+		t.Fatal("expected no migration for nonexistent project")
+	}
+}
+
+func TestMigrateProjectIdempotent(t *testing.T) {
+	s := newTestStore(t)
+	old, new_ := "old-proj", "new-proj"
+
+	s.CreateSession("s1", old, "/tmp")
+	s.AddObservation(AddObservationParams{
+		SessionID: "s1", Type: "decision", Title: "test",
+		Content: "content", Workspace: old, Visibility: "project",
+	})
+
+	// First migration
+	r1, err := s.MigrateProject(old, new_)
+	if err != nil {
+		t.Fatalf("first MigrateWorkspace: %v", err)
+	}
+	if !r1.Migrated {
+		t.Fatal("first migration should migrate")
+	}
+
+	// Second migration — no records under old name anymore
+	r2, err := s.MigrateProject(old, new_)
+	if err != nil {
+		t.Fatalf("second MigrateWorkspace: %v", err)
+	}
+	if r2.Migrated {
+		t.Fatal("second migration should be a no-op")
+	}
+}
+
+// ─── Phase 2: project-name-drift — NormalizeProject, ListProjectNames,
+//              ListProjectsWithStats, MergeProjects tests ─────────────────────
+
+func TestNormalizeProjectFunction(t *testing.T) {
+	tests := []struct {
+		input       string
+		wantName    string
+		wantWarning bool
+	}{
+		{"ancora", "ancora", false},
+		{"Ancora", "ancora", true},
+		{"ANCORA", "ancora", true},
+		{"  ancora  ", "ancora", true},
+		{"Ancora-Memory", "ancora-memory", true},
+		{"ancora--memory", "ancora-memory", true},
+		{"ancora__memory", "ancora_memory", true},
+		{"", "", false},
+		{"already-lower", "already-lower", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			got, warning := NormalizeProject(tc.input)
+			if got != tc.wantName {
+				t.Errorf("NormalizeProject(%q) name = %q, want %q", tc.input, got, tc.wantName)
+			}
+			if tc.wantWarning && warning == "" {
+				t.Errorf("NormalizeProject(%q) expected a warning, got empty string", tc.input)
+			}
+			if !tc.wantWarning && warning != "" {
+				t.Errorf("NormalizeProject(%q) expected no warning, got %q", tc.input, warning)
+			}
+		})
+	}
+}
+
+func TestAddObservationNormalizesProject(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Save with mixed-case project name
+	id, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "Normalize test",
+		Content:    "This should be stored under lowercase project",
+		Workspace:  "Ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+
+	obs, err := s.GetObservation(id)
+	if err != nil {
+		t.Fatalf("GetObservation: %v", err)
+	}
+
+	// Stored project should be normalized to lowercase
+	if obs.Workspace == nil || *obs.Workspace != "ancora" {
+		got := "<nil>"
+		if obs.Workspace != nil {
+			got = *obs.Workspace
+		}
+		t.Errorf("stored project = %q, want \"ancora\"", got)
+	}
+}
+
+func TestSearchNormalizesProjectFilter(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Store observation under already-lowercase project
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "Search normalize test",
+		Content:    "content for project filter normalization",
+		Workspace:  "ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+
+	// Search with UPPERCASE project filter — should still find the record
+	results, err := s.Search("normalize test", SearchOptions{
+		Workspace: "Ancora", // intentionally mixed-case
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	if len(results) == 0 {
+		t.Fatalf("expected ≥1 result when searching with normalized project filter, got 0")
+	}
+}
+
+func TestRecentObservationsNormalizesProjectFilter(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "Recent obs test",
+		Content:    "some content",
+		Workspace:  "ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+
+	// Query with uppercase project name
+	obs, err := s.RecentObservations("ANCORA", "", 10)
+	if err != nil {
+		t.Fatalf("RecentObservations: %v", err)
+	}
+	if len(obs) == 0 {
+		t.Fatalf("expected ≥1 result with normalized project filter, got 0")
+	}
+}
+
+func TestCreateSessionNormalizesProject(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s-norm", "MyProject", "/tmp"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	sess, err := s.GetSession("s-norm")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.Project != "myproject" {
+		t.Errorf("expected project=myproject (normalized), got %q", sess.Project)
+	}
+}
+
+func TestListProjectNames(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "alpha", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := s.CreateSession("s2", "beta", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	for _, proj := range []string{"alpha", "alpha", "beta", "gamma"} {
+		_, err := s.AddObservation(AddObservationParams{
+			SessionID:  "s1",
+			Type:       "decision",
+			Title:      "test " + proj,
+			Content:    "content for " + proj,
+			Workspace:  proj,
+			Visibility: "project",
+		})
+		if err != nil {
+			t.Fatalf("AddObservation: %v", err)
+		}
+	}
+
+	names, err := s.ListProjectNames()
+	if err != nil {
+		t.Fatalf("ListProjectNames: %v", err)
+	}
+
+	// Should return distinct names: alpha, beta, gamma
+	want := map[string]bool{"alpha": true, "beta": true, "gamma": true}
+	for _, n := range names {
+		if !want[n] {
+			t.Errorf("unexpected project name %q in results", n)
+		}
+		delete(want, n)
+	}
+	if len(want) > 0 {
+		t.Errorf("missing project names: %v", want)
+	}
+}
+
+func TestListProjectsWithStats(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "proj-a", "/work/a"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := s.CreateSession("s2", "proj-b", "/work/b"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Add 3 observations to proj-a
+	for i := 0; i < 3; i++ {
+		_, err := s.AddObservation(AddObservationParams{
+			SessionID:  "s1",
+			Type:       "decision",
+			Title:      "obs a",
+			Content:    strings.Repeat("x", i+1), // unique content per obs
+			Workspace:  "proj-a",
+			Visibility: "project",
+		})
+		if err != nil {
+			t.Fatalf("AddObservation proj-a: %v", err)
+		}
+	}
+
+	// Add 1 observation to proj-b
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s2",
+		Type:       "decision",
+		Title:      "obs b",
+		Content:    "content for proj-b",
+		Workspace:  "proj-b",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("AddObservation proj-b: %v", err)
+	}
+
+	stats, err := s.ListProjectsWithStats()
+	if err != nil {
+		t.Fatalf("ListProjectsWithStats: %v", err)
+	}
+
+	if len(stats) < 2 {
+		t.Fatalf("expected ≥2 project stats, got %d", len(stats))
+	}
+
+	// Find proj-a and proj-b in results
+	statsMap := make(map[string]ProjectStats)
+	for _, ps := range stats {
+		statsMap[ps.Name] = ps
+	}
+
+	if a, ok := statsMap["proj-a"]; !ok {
+		t.Error("proj-a not in ListProjectsWithStats results")
+	} else {
+		if a.ObservationCount != 3 {
+			t.Errorf("proj-a: expected 3 observations, got %d", a.ObservationCount)
+		}
+		if a.SessionCount != 1 {
+			t.Errorf("proj-a: expected 1 session, got %d", a.SessionCount)
+		}
+	}
+
+	if b, ok := statsMap["proj-b"]; !ok {
+		t.Error("proj-b not in ListProjectsWithStats results")
+	} else {
+		if b.ObservationCount != 1 {
+			t.Errorf("proj-b: expected 1 observation, got %d", b.ObservationCount)
+		}
+	}
+
+	// Results should be sorted by observation count descending
+	if stats[0].Name != "proj-a" {
+		t.Errorf("expected proj-a first (most observations), got %q", stats[0].Name)
+	}
+}
+
+func TestMergeProjects(t *testing.T) {
+	s := newTestStore(t)
+
+	// Set up three source projects
+	sources := []string{"ancora", "Ancora", "ancora-memory"}
+	canonical := "ancora"
+
+	if err := s.CreateSession("s1", "ancora", "/work"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Add observations to each source
+	for _, src := range []string{"ancora", "ancora-memory"} {
+		for i := 0; i < 2; i++ {
+			_, err := s.AddObservation(AddObservationParams{
+				SessionID:  "s1",
+				Type:       "decision",
+				Title:      "obs from " + src,
+				Content:    strings.Repeat(src, i+1),
+				Workspace:  src,
+				Visibility: "project",
+			})
+			if err != nil {
+				t.Fatalf("AddObservation %s: %v", src, err)
+			}
+		}
+	}
+
+	result, err := s.MergeProjects(sources, canonical)
+	if err != nil {
+		t.Fatalf("MergeProjects: %v", err)
+	}
+
+	if result.Canonical != "ancora" {
+		t.Errorf("canonical = %q, want \"ancora\"", result.Canonical)
+	}
+
+	// "Ancora" normalizes to "ancora" (same as canonical) → skipped
+	// "ancora-memory" is different → merged
+	// Only "ancora-memory" should appear in SourcesMerged (and possibly "ancora" if it had records,
+	// but it equals canonical after normalization → skipped)
+	for _, merged := range result.SourcesMerged {
+		if merged == "ancora" {
+			t.Error("canonical 'ancora' should not appear in SourcesMerged")
+		}
+	}
+
+	// All records from ancora-memory should now be under "ancora"
+	obs, err := s.RecentObservations("ancora", "", 20)
+	if err != nil {
+		t.Fatalf("RecentObservations: %v", err)
+	}
+	if len(obs) < 4 {
+		t.Errorf("expected ≥4 observations under 'ancora' after merge, got %d", len(obs))
+	}
+
+	// ancora-memory should have 0 observations
+	obsMerged, err := s.RecentObservations("ancora-memory", "", 10)
+	if err != nil {
+		t.Fatalf("RecentObservations ancora-memory: %v", err)
+	}
+	if len(obsMerged) != 0 {
+		t.Errorf("expected 0 observations under 'ancora' after merge, got %d", len(obsMerged))
+	}
+}
+
+func TestMergeProjectsIdempotent(t *testing.T) {
+	s := newTestStore(t)
+
+	// Merge a nonexistent source — should not error
+	result, err := s.MergeProjects([]string{"ghost-project"}, "ancora")
+	if err != nil {
+		t.Fatalf("MergeProjects with nonexistent source: %v", err)
+	}
+	if result.ObservationsUpdated != 0 {
+		t.Errorf("expected 0 observations updated for nonexistent source, got %d", result.ObservationsUpdated)
+	}
+}
+
+func TestMergeProjectsCanonicalInSources(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "ancora", "/work"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Put some obs under "ancora"
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "existing",
+		Content:    "existing observation",
+		Workspace:  "ancora",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+
+	// Sources include the canonical itself — should be silently skipped
+	result, err := s.MergeProjects([]string{"ancora", "Ancora"}, "ancora")
+	if err != nil {
+		t.Fatalf("MergeProjects: %v", err)
+	}
+
+	// Nothing should have been changed (ancora and Ancora both normalize to "ancora" = canonical)
+	if result.ObservationsUpdated != 0 {
+		t.Errorf("expected 0 observations updated when sources equal canonical, got %d", result.ObservationsUpdated)
+	}
+	if len(result.SourcesMerged) != 0 {
+		t.Errorf("expected empty SourcesMerged when all sources equal canonical, got %v", result.SourcesMerged)
+	}
+}
+
+func TestCountObservationsForProject(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "alpha", "/work/alpha"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// No observations yet — count should be 0
+	count, err := s.CountObservationsForProject("alpha")
+	if err != nil {
+		t.Fatalf("CountObservationsForWorkspace: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0, got %d", count)
+	}
+
+	// Add two observations
+	for i := 0; i < 2; i++ {
+		if _, err := s.AddObservation(AddObservationParams{
+			SessionID:  "s1",
+			Type:       "decision",
+			Title:      "obs " + string(rune('A'+i)),
+			Content:    "unique content that is definitely unique " + string(rune('A'+i)),
+			Workspace:  "alpha",
+			Visibility: "project",
+		}); err != nil {
+			t.Fatalf("AddObservation: %v", err)
+		}
+	}
+
+	count, err = s.CountObservationsForProject("alpha")
+	if err != nil {
+		t.Fatalf("CountObservationsForWorkspace: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2, got %d", count)
+	}
+
+	// Different project should return 0
+	count, err = s.CountObservationsForProject("beta")
+	if err != nil {
+		t.Fatalf("CountObservationsForProject for beta: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 for beta, got %d", count)
+	}
+}
+
+// ─── Semantic Search Tests ────────────────────────────────────────────────────
+
+func TestSetEmbeddingAndSearchSemantic(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create a session.
+	sessID := "sem-sess-1"
+	if err := s.CreateSession(sessID, "testproj", "/tmp"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// Add two observations.
+	id1, err := s.AddObservation(AddObservationParams{
+		SessionID:  sessID,
+		Type:       "decision",
+		Title:      "Use Go for backend",
+		Content:    "We decided to use Go for its concurrency model",
+		Workspace:  "testproj",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("AddObservation 1: %v", err)
+	}
+
+	id2, err := s.AddObservation(AddObservationParams{
+		SessionID:  sessID,
+		Type:       "decision",
+		Title:      "Use TypeScript for frontend",
+		Content:    "We chose TypeScript for type safety",
+		Workspace:  "testproj",
+		Visibility: "project",
+	})
+	if err != nil {
+		t.Fatalf("AddObservation 2: %v", err)
+	}
+
+	// Orthogonal 3-dim test vectors.
+	vec1 := []float32{1.0, 0.0, 0.0}
+	vec2 := []float32{0.0, 1.0, 0.0}
+
+	if err := s.SetEmbedding(id1, vec1); err != nil {
+		t.Fatalf("SetEmbedding 1: %v", err)
+	}
+	if err := s.SetEmbedding(id2, vec2); err != nil {
+		t.Fatalf("SetEmbedding 2: %v", err)
+	}
+
+	// Query with vec1 — id1 should rank first (sim=1.0 vs 0.0).
+	results, err := s.SearchSemantic(vec1, 10)
+	if err != nil {
+		t.Fatalf("SearchSemantic: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].ID != id1 {
+		t.Errorf("expected id1 (%d) first, got id=%d (rank=%.3f)", id1, results[0].ID, results[0].Rank)
+	}
+	if results[0].Rank < 0.99 {
+		t.Errorf("top result should have sim ~1.0, got %.3f", results[0].Rank)
+	}
+	if results[1].Rank > 0.01 {
+		t.Errorf("second result should have sim ~0.0, got %.3f", results[1].Rank)
+	}
+
+	// SetEmbedding(nil) should clear the vector.
+	if err := s.SetEmbedding(id1, nil); err != nil {
+		t.Fatalf("SetEmbedding(nil): %v", err)
+	}
+	results, err = s.SearchSemantic(vec1, 10)
+	if err != nil {
+		t.Fatalf("SearchSemantic after clear: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result after clearing id1, got %d", len(results))
+	}
+	if results[0].ID != id2 {
+		t.Errorf("expected id2 (%d), got id=%d", id2, results[0].ID)
+	}
+}
+
+// TestMigrateToNewSchema tests the backfill of workspace, visibility, and organization fields.
+// PR1: Schema refactor - tests migration from project/scope to workspace/visibility/organization.
+func TestMigrateToNewSchema(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "ancora.db")
+
+	// Create legacy database with old schema (project + scope)
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			project TEXT NOT NULL,
+			directory TEXT NOT NULL,
+			started_at TEXT NOT NULL DEFAULT (datetime('now')),
+			ended_at TEXT,
+			summary TEXT
+		);
+		CREATE TABLE observations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			sync_id TEXT,
+			session_id TEXT NOT NULL,
+			type TEXT NOT NULL,
+			title TEXT NOT NULL,
+			content TEXT NOT NULL,
+			tool_name TEXT,
+			project TEXT,
+			scope TEXT NOT NULL DEFAULT 'project',
+			topic_key TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (session_id) REFERENCES sessions(id)
+		);
+		
+		INSERT INTO sessions (id, project, directory) VALUES ('s1', 'test', '/tmp/test');
+		
+		-- Insert test observations with different project/scope combinations
+		INSERT INTO observations (sync_id, session_id, type, title, content, project, scope)
+		VALUES
+			-- glim-* should map to organization=glim
+			('obs-1', 's1', 'bugfix', 'Fix glim bug', 'content', 'glim-api', 'project'),
+			-- syfra/ancora/opencode should map to organization=syfra
+			('obs-2', 's1', 'decision', 'Syfra change', 'content', 'syfra', 'project'),
+			('obs-3', 's1', 'architecture', 'Ancora improvement', 'content', 'ancora', 'project'),
+			-- personal scope should map to visibility=personal, organization=NULL
+			('obs-4', 's1', 'manual', 'My goals', 'content', 'life', 'personal'),
+			-- other projects should map to organization=personal-projects
+			('obs-5', 's1', 'learning', 'Learn Rust', 'content', 'learning', 'project');
+	`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("seed legacy db: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	// Open with new store (should run migration)
+	cfg := mustDefaultConfig(t)
+	cfg.DataDir = dataDir
+
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new store after legacy schema: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	// Query the observations and verify migration
+	type result struct {
+		Title        string
+		Project      *string
+		Scope        string
+		Workspace    *string
+		Visibility   string
+		Organization *string
+	}
+
+	rows, err := s.db.Query(`
+		SELECT title, project, scope, workspace, visibility, organization
+		FROM observations
+		ORDER BY id
+	`)
+	if err != nil {
+		t.Fatalf("query observations: %v", err)
+	}
+	defer rows.Close()
+
+	var results []result
+	for rows.Next() {
+		var r result
+		if err := rows.Scan(&r.Title, &r.Workspace, &r.Visibility, &r.Workspace, &r.Visibility, &r.Organization); err != nil {
+			t.Fatalf("scan row: %v", err)
+		}
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows error: %v", err)
+	}
+
+	if len(results) != 5 {
+		t.Fatalf("expected 5 observations, got %d", len(results))
+	}
+
+	// Test case 1: glim-api -> organization=glim, visibility=work
+	if results[0].Workspace == nil || *results[0].Workspace != "glim-api" {
+		t.Errorf("obs 1: expected workspace=glim-api, got %v", results[0].Workspace)
+	}
+	if results[0].Visibility != "work" {
+		t.Errorf("obs 1: expected visibility=work, got %s", results[0].Visibility)
+	}
+	if results[0].Organization == nil || *results[0].Organization != "glim" {
+		t.Errorf("obs 1: expected organization=glim, got %v", results[0].Organization)
+	}
+
+	// Test case 2: syfra -> organization=syfra, visibility=work
+	if results[1].Workspace == nil || *results[1].Workspace != "syfra" {
+		t.Errorf("obs 2: expected workspace=syfra, got %v", results[1].Workspace)
+	}
+	if results[1].Visibility != "work" {
+		t.Errorf("obs 2: expected visibility=work, got %s", results[1].Visibility)
+	}
+	if results[1].Organization == nil || *results[1].Organization != "syfra" {
+		t.Errorf("obs 2: expected organization=syfra, got %v", results[1].Organization)
+	}
+
+	// Test case 3: ancora -> organization=syfra, visibility=work
+	if results[2].Workspace == nil || *results[2].Workspace != "ancora" {
+		t.Errorf("obs 3: expected workspace=ancora, got %v", results[2].Workspace)
+	}
+	if results[2].Visibility != "work" {
+		t.Errorf("obs 3: expected visibility=work, got %s", results[2].Visibility)
+	}
+	if results[2].Organization == nil || *results[2].Organization != "syfra" {
+		t.Errorf("obs 3: expected organization=syfra, got %v", results[2].Organization)
+	}
+
+	// Test case 4: personal scope -> visibility=personal, organization=NULL
+	if results[3].Workspace == nil || *results[3].Workspace != "life" {
+		t.Errorf("obs 4: expected workspace=life, got %v", results[3].Workspace)
+	}
+	if results[3].Visibility != "personal" {
+		t.Errorf("obs 4: expected visibility=personal, got %s", results[3].Visibility)
+	}
+	if results[3].Organization != nil {
+		t.Errorf("obs 4: expected organization=NULL, got %v", results[3].Organization)
+	}
+
+	// Test case 5: other project -> organization=personal-projects, visibility=work
+	if results[4].Workspace == nil || *results[4].Workspace != "learning" {
+		t.Errorf("obs 5: expected workspace=learning, got %v", results[4].Workspace)
+	}
+	if results[4].Visibility != "work" {
+		t.Errorf("obs 5: expected visibility=work, got %s", results[4].Visibility)
+	}
+	if results[4].Organization == nil || *results[4].Organization != "personal-projects" {
+		t.Errorf("obs 5: expected organization=personal-projects, got %v", results[4].Organization)
+	}
+}
+
+// TestMigrateToNewSchemaIdempotent verifies migration is idempotent (safe to run multiple times).
+func TestMigrateToNewSchemaIdempotent(t *testing.T) {
+	cfg := mustDefaultConfig(t)
+	cfg.DataDir = t.TempDir()
+
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	// Add observation with old fields
+	_, err = s.db.Exec(`
+		INSERT INTO sessions (id, project, directory) VALUES ('s1', 'test', '/tmp/test');
+		INSERT INTO observations (sync_id, session_id, type, title, content, project, scope)
+		VALUES ('obs-1', 's1', 'bugfix', 'Test', 'content', 'glim-api', 'project');
+	`)
+	if err != nil {
+		t.Fatalf("insert test data: %v", err)
+	}
+
+	// Run migration first time
+	if err := s.migrateToNewSchema(); err != nil {
+		t.Fatalf("first migration: %v", err)
+	}
+
+	// Verify migration worked
+	var workspace, visibility, organization sql.NullString
+	err = s.db.QueryRow(`SELECT workspace, visibility, organization FROM observations WHERE sync_id = 'obs-1'`).Scan(&workspace, &visibility, &organization)
+	if err != nil {
+		t.Fatalf("query after first migration: %v", err)
+	}
+	if !workspace.Valid || workspace.String != "glim-api" {
+		t.Errorf("after first migration: expected workspace=glim-api, got %v", workspace)
+	}
+
+	// Run migration second time (should be no-op)
+	if err := s.migrateToNewSchema(); err != nil {
+		t.Fatalf("second migration: %v", err)
+	}
+
+	// Verify data unchanged
+	var workspace2, visibility2, organization2 sql.NullString
+	err = s.db.QueryRow(`SELECT workspace, visibility, organization FROM observations WHERE sync_id = 'obs-1'`).Scan(&workspace2, &visibility2, &organization2)
+	if err != nil {
+		t.Fatalf("query after second migration: %v", err)
+	}
+	if workspace2.String != workspace.String {
+		t.Errorf("migration not idempotent: workspace changed from %s to %s", workspace.String, workspace2.String)
+	}
+}
+
+// ─── Tests for 0% Coverage Functions ──────────────────────────────────────────
+
+func TestFallbackConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		dataDir string
+		want    Config
+	}{
+		{
+			name:    "creates config with provided directory",
+			dataDir: "/custom/data/dir",
+			want: Config{
+				DataDir:              "/custom/data/dir",
+				MaxObservationLength: 50000,
+				MaxContextResults:    20,
+				MaxSearchResults:     20,
+				DedupeWindow:         15 * time.Minute,
+			},
+		},
+		{
+			name:    "handles empty directory",
+			dataDir: "",
+			want: Config{
+				DataDir:              "",
+				MaxObservationLength: 50000,
+				MaxContextResults:    20,
+				MaxSearchResults:     20,
+				DedupeWindow:         15 * time.Minute,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FallbackConfig(tt.dataDir)
+
+			if got.DataDir != tt.want.DataDir {
+				t.Errorf("DataDir = %q, want %q", got.DataDir, tt.want.DataDir)
+			}
+			if got.MaxObservationLength != tt.want.MaxObservationLength {
+				t.Errorf("MaxObservationLength = %d, want %d", got.MaxObservationLength, tt.want.MaxObservationLength)
+			}
+			if got.MaxContextResults != tt.want.MaxContextResults {
+				t.Errorf("MaxContextResults = %d, want %d", got.MaxContextResults, tt.want.MaxContextResults)
+			}
+			if got.MaxSearchResults != tt.want.MaxSearchResults {
+				t.Errorf("MaxSearchResults = %d, want %d", got.MaxSearchResults, tt.want.MaxSearchResults)
+			}
+			if got.DedupeWindow != tt.want.DedupeWindow {
+				t.Errorf("DedupeWindow = %v, want %v", got.DedupeWindow, tt.want.DedupeWindow)
+			}
+		})
+	}
+}
+
+func TestMaxObservationLength(t *testing.T) {
+	tests := []struct {
+		name           string
+		configuredMax  int
+		expectedLength int
+	}{
+		{
+			name:           "returns configured max",
+			configuredMax:  100000,
+			expectedLength: 100000,
+		},
+		{
+			name:           "returns default max",
+			configuredMax:  50000,
+			expectedLength: 50000,
+		},
+		{
+			name:           "returns custom small max",
+			configuredMax:  1000,
+			expectedLength: 1000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := mustDefaultConfig(t)
+			cfg.DataDir = t.TempDir()
+			cfg.MaxObservationLength = tt.configuredMax
+
+			s, err := New(cfg)
+			if err != nil {
+				t.Fatalf("new store: %v", err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+
+			got := s.MaxObservationLength()
+			if got != tt.expectedLength {
+				t.Errorf("MaxObservationLength() = %d, want %d", got, tt.expectedLength)
+			}
+		})
+	}
+}
+
+func TestListObservationsForEmbedding(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create session
+	if err := s.CreateSession("s1", "test-project", "/tmp/test"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Add observations - some with embeddings, some without
+	obs1, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "Without embedding",
+		Content:    "This observation needs an embedding",
+		Workspace:  "test-project",
+		Visibility: "work",
+	})
+	if err != nil {
+		t.Fatalf("add observation 1: %v", err)
+	}
+
+	obs2, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "decision",
+		Title:      "With embedding",
+		Content:    "This observation has an embedding",
+		Workspace:  "test-project",
+		Visibility: "work",
+	})
+	if err != nil {
+		t.Fatalf("add observation 2: %v", err)
+	}
+
+	// Set embedding for obs2
+	embedding := []float32{0.1, 0.2, 0.3, 0.4}
+	if err := s.SetEmbedding(obs2, embedding); err != nil {
+		t.Fatalf("set embedding: %v", err)
+	}
+
+	obs3, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "architecture",
+		Title:      "Another without embedding",
+		Content:    "Also needs embedding",
+		Workspace:  "test-project",
+		Visibility: "work",
+	})
+	if err != nil {
+		t.Fatalf("add observation 3: %v", err)
+	}
+
+	// Add a soft-deleted observation (should be excluded)
+	obs4, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "Deleted observation",
+		Content:    "Should not appear",
+		Workspace:  "test-project",
+		Visibility: "work",
+	})
+	if err != nil {
+		t.Fatalf("add observation 4: %v", err)
+	}
+	if err := s.DeleteObservation(obs4, false); err != nil {
+		t.Fatalf("delete observation 4: %v", err)
+	}
+
+	// Get observations needing embeddings
+	results, err := s.ListObservationsForEmbedding()
+	if err != nil {
+		t.Fatalf("ListObservationsForEmbedding: %v", err)
+	}
+
+	// Should only return obs1 and obs3 (no embedding, not deleted)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 observations, got %d", len(results))
+	}
+
+	// Results should be ordered by ID DESC
+	if results[0].ID != obs3 {
+		t.Errorf("first result should be obs3 (ID %d), got ID %d", obs3, results[0].ID)
+	}
+	if results[1].ID != obs1 {
+		t.Errorf("second result should be obs1 (ID %d), got ID %d", obs1, results[1].ID)
+	}
+
+	// Verify fields are populated correctly
+	if results[0].Title != "Another without embedding" {
+		t.Errorf("wrong title for obs3: %q", results[0].Title)
+	}
+	if results[1].Title != "Without embedding" {
+		t.Errorf("wrong title for obs1: %q", results[1].Title)
+	}
+}
+
+func TestAckSyncMutationSeqs(t *testing.T) {
+	s := newTestStore(t)
+
+	targetKey := "test-target"
+
+	// Initialize sync state first
+	_, err := s.db.Exec(`
+		INSERT INTO sync_state (target_key, last_acked_seq, lifecycle, updated_at)
+		VALUES (?, 0, 'pending', datetime('now'))
+	`, targetKey)
+	if err != nil {
+		t.Fatalf("insert sync state: %v", err)
+	}
+
+	// Create some sync mutations manually
+	_, err = s.db.Exec(`
+		INSERT INTO sync_mutations (target_key, entity, entity_key, op, payload, occurred_at)
+		VALUES 
+			(?, 'observation', 'obs-1', 'upsert', '{}', datetime('now')),
+			(?, 'observation', 'obs-2', 'upsert', '{}', datetime('now')),
+			(?, 'observation', 'obs-3', 'upsert', '{}', datetime('now'))
+	`, targetKey, targetKey, targetKey)
+	if err != nil {
+		t.Fatalf("insert sync mutations: %v", err)
+	}
+
+	tests := []struct {
+		name            string
+		seqs            []int64
+		expectAcked     []int64
+		expectMaxSeq    int64
+		expectLifecycle string
+	}{
+		{
+			name:            "ack single sequence",
+			seqs:            []int64{1},
+			expectAcked:     []int64{1},
+			expectMaxSeq:    1,
+			expectLifecycle: "pending",
+		},
+		{
+			name:            "ack multiple sequences",
+			seqs:            []int64{2, 3},
+			expectAcked:     []int64{1, 2, 3},
+			expectMaxSeq:    3,
+			expectLifecycle: "healthy",
+		},
+		{
+			name:            "ack empty slice is no-op",
+			seqs:            []int64{},
+			expectAcked:     []int64{1, 2, 3},
+			expectMaxSeq:    3,
+			expectLifecycle: "healthy",
+		},
+		{
+			name:            "ack with invalid seqs (zero/negative) are skipped",
+			seqs:            []int64{0, -1, -5},
+			expectAcked:     []int64{1, 2, 3},
+			expectMaxSeq:    3,
+			expectLifecycle: "healthy",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := s.AckSyncMutationSeqs(targetKey, tt.seqs)
+			if err != nil {
+				t.Fatalf("AckSyncMutationSeqs: %v", err)
+			}
+
+			// Verify acked mutations
+			var ackedCount int
+			err = s.db.QueryRow(`SELECT COUNT(*) FROM sync_mutations WHERE target_key = ? AND acked_at IS NOT NULL`, targetKey).Scan(&ackedCount)
+			if err != nil {
+				t.Fatalf("count acked mutations: %v", err)
+			}
+			if ackedCount != len(tt.expectAcked) {
+				t.Errorf("expected %d acked mutations, got %d", len(tt.expectAcked), ackedCount)
+			}
+
+			// Verify sync state
+			var lastAckedSeq int64
+			var lifecycle string
+			err = s.db.QueryRow(`SELECT last_acked_seq, lifecycle FROM sync_state WHERE target_key = ?`, targetKey).Scan(&lastAckedSeq, &lifecycle)
+			if err != nil {
+				t.Fatalf("query sync state: %v", err)
+			}
+			if lastAckedSeq != tt.expectMaxSeq {
+				t.Errorf("last_acked_seq = %d, want %d", lastAckedSeq, tt.expectMaxSeq)
+			}
+			if lifecycle != tt.expectLifecycle {
+				t.Errorf("lifecycle = %q, want %q", lifecycle, tt.expectLifecycle)
+			}
+		})
+	}
+}
+
+func TestPruneProject(t *testing.T) {
+	s := newTestStore(t)
+
+	tests := []struct {
+		name          string
+		setupFn       func(*testing.T)
+		project       string
+		wantErr       bool
+		errContains   string
+		checkResultFn func(*testing.T, *PruneResult)
+	}{
+		{
+			name:        "error on empty project name",
+			project:     "",
+			wantErr:     true,
+			errContains: "project name must not be empty",
+		},
+		{
+			name: "error when project has observations",
+			setupFn: func(t *testing.T) {
+				if err := s.CreateSession("s1", "has-obs", "/tmp/test"); err != nil {
+					t.Fatalf("create session: %v", err)
+				}
+				_, err := s.AddObservation(AddObservationParams{
+					SessionID:  "s1",
+					Type:       "bugfix",
+					Title:      "Test",
+					Content:    "Cannot prune",
+					Workspace:  "has-obs",
+					Visibility: "work",
+				})
+				if err != nil {
+					t.Fatalf("add observation: %v", err)
+				}
+			},
+			project:     "has-obs",
+			wantErr:     true,
+			errContains: "still has 1 observations",
+		},
+		{
+			name: "successfully prunes project with only sessions and prompts",
+			setupFn: func(t *testing.T) {
+				if err := s.CreateSession("s2", "empty-project", "/tmp/test"); err != nil {
+					t.Fatalf("create session: %v", err)
+				}
+				_, err := s.AddPrompt(AddPromptParams{
+					SessionID: "s2",
+					Content:   "Test prompt",
+					Project:   "empty-project",
+				})
+				if err != nil {
+					t.Fatalf("add prompt: %v", err)
+				}
+			},
+			project: "empty-project",
+			wantErr: false,
+			checkResultFn: func(t *testing.T, result *PruneResult) {
+				if result.Project != "empty-project" {
+					t.Errorf("result.Project = %q, want %q", result.Project, "empty-project")
+				}
+				if result.SessionsDeleted != 1 {
+					t.Errorf("SessionsDeleted = %d, want 1", result.SessionsDeleted)
+				}
+				if result.PromptsDeleted != 1 {
+					t.Errorf("PromptsDeleted = %d, want 1", result.PromptsDeleted)
+				}
+			},
+		},
+		{
+			name: "prune project with no data returns zero counts",
+			setupFn: func(t *testing.T) {
+				// Create project with no sessions or prompts (just enroll it)
+				if err := s.EnrollProject("empty-enrolled"); err != nil {
+					t.Fatalf("enroll project: %v", err)
+				}
+			},
+			project: "empty-enrolled",
+			wantErr: false,
+			checkResultFn: func(t *testing.T, result *PruneResult) {
+				if result.SessionsDeleted != 0 {
+					t.Errorf("SessionsDeleted = %d, want 0", result.SessionsDeleted)
+				}
+				if result.PromptsDeleted != 0 {
+					t.Errorf("PromptsDeleted = %d, want 0", result.PromptsDeleted)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setupFn != nil {
+				tt.setupFn(t)
+			}
+
+			result, err := s.PruneProject(tt.project)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.errContains)
+				}
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("error = %q, want substring %q", err.Error(), tt.errContains)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.checkResultFn != nil {
+				tt.checkResultFn(t, result)
+			}
+		})
+	}
+}
+
+func TestPurgeAll(t *testing.T) {
+	s := newTestStore(t)
+
+	// Setup: Create sessions, observations, and prompts
+	if err := s.CreateSession("s1", "project1", "/tmp/p1"); err != nil {
+		t.Fatalf("create session s1: %v", err)
+	}
+	if err := s.CreateSession("s2", "project2", "/tmp/p2"); err != nil {
+		t.Fatalf("create session s2: %v", err)
+	}
+
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "Test 1",
+		Content:    "Content 1",
+		Workspace:  "project1",
+		Visibility: "work",
+	})
+	if err != nil {
+		t.Fatalf("add observation 1: %v", err)
+	}
+
+	_, err = s.AddObservation(AddObservationParams{
+		SessionID:  "s2",
+		Type:       "decision",
+		Title:      "Test 2",
+		Content:    "Content 2",
+		Workspace:  "project2",
+		Visibility: "work",
+	})
+	if err != nil {
+		t.Fatalf("add observation 2: %v", err)
+	}
+
+	_, err = s.AddPrompt(AddPromptParams{
+		SessionID: "s1",
+		Content:   "Prompt 1",
+		Project:   "project1",
+	})
+	if err != nil {
+		t.Fatalf("add prompt 1: %v", err)
+	}
+
+	_, err = s.AddPrompt(AddPromptParams{
+		SessionID: "s2",
+		Content:   "Prompt 2",
+		Project:   "project2",
+	})
+	if err != nil {
+		t.Fatalf("add prompt 2: %v", err)
+	}
+
+	// Verify data exists before purge
+	var obsCount, sessCount, promptCount int
+	s.db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&obsCount)
+	s.db.QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&sessCount)
+	s.db.QueryRow(`SELECT COUNT(*) FROM user_prompts`).Scan(&promptCount)
+
+	if obsCount < 2 {
+		t.Fatalf("expected at least 2 observations before purge, got %d", obsCount)
+	}
+	if sessCount < 2 {
+		t.Fatalf("expected at least 2 sessions before purge, got %d", sessCount)
+	}
+	if promptCount < 2 {
+		t.Fatalf("expected at least 2 prompts before purge, got %d", promptCount)
+	}
+
+	// Execute PurgeAll
+	result, err := s.PurgeAll()
+	if err != nil {
+		t.Fatalf("PurgeAll: %v", err)
+	}
+
+	// Verify result counts
+	if result.ObservationsDeleted < 2 {
+		t.Errorf("expected at least 2 observations deleted, got %d", result.ObservationsDeleted)
+	}
+	if result.SessionsDeleted < 2 {
+		t.Errorf("expected at least 2 sessions deleted, got %d", result.SessionsDeleted)
+	}
+	if result.PromptsDeleted < 2 {
+		t.Errorf("expected at least 2 prompts deleted, got %d", result.PromptsDeleted)
+	}
+
+	// Verify all tables are empty
+	s.db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&obsCount)
+	s.db.QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&sessCount)
+	s.db.QueryRow(`SELECT COUNT(*) FROM user_prompts`).Scan(&promptCount)
+
+	if obsCount != 0 {
+		t.Errorf("observations table not empty after purge: %d rows", obsCount)
+	}
+	if sessCount != 0 {
+		t.Errorf("sessions table not empty after purge: %d rows", sessCount)
+	}
+	if promptCount != 0 {
+		t.Errorf("user_prompts table not empty after purge: %d rows", promptCount)
+	}
+}
+
+func TestApplyPromptUpsertTx(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create session
+	if err := s.CreateSession("s1", "test-project", "/tmp/test"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	projectPtr := func(s string) *string { return &s }
+
+	tests := []struct {
+		name     string
+		payload  syncPromptPayload
+		checkFn  func(*testing.T)
+		isUpdate bool
+	}{
+		{
+			name: "inserts new prompt",
+			payload: syncPromptPayload{
+				SyncID:    "prompt-sync-1",
+				SessionID: "s1",
+				Content:   "New prompt content",
+				Project:   projectPtr("test-project"),
+			},
+			checkFn: func(t *testing.T) {
+				var content, project string
+				err := s.db.QueryRow(`SELECT content, project FROM user_prompts WHERE sync_id = ?`, "prompt-sync-1").Scan(&content, &project)
+				if err != nil {
+					t.Fatalf("query prompt: %v", err)
+				}
+				if content != "New prompt content" {
+					t.Errorf("content = %q, want %q", content, "New prompt content")
+				}
+				if project != "test-project" {
+					t.Errorf("project = %q, want %q", project, "test-project")
+				}
+			},
+		},
+		{
+			name: "updates existing prompt with same sync_id",
+			payload: syncPromptPayload{
+				SyncID:    "prompt-sync-1",
+				SessionID: "s1",
+				Content:   "Updated prompt content",
+				Project:   projectPtr("test-project-updated"),
+			},
+			isUpdate: true,
+			checkFn: func(t *testing.T) {
+				var content, project string
+				var count int
+				// Verify only one row exists with this sync_id
+				s.db.QueryRow(`SELECT COUNT(*) FROM user_prompts WHERE sync_id = ?`, "prompt-sync-1").Scan(&count)
+				if count != 1 {
+					t.Fatalf("expected 1 prompt with sync_id, got %d", count)
+				}
+
+				err := s.db.QueryRow(`SELECT content, project FROM user_prompts WHERE sync_id = ?`, "prompt-sync-1").Scan(&content, &project)
+				if err != nil {
+					t.Fatalf("query prompt: %v", err)
+				}
+				if content != "Updated prompt content" {
+					t.Errorf("content = %q, want %q", content, "Updated prompt content")
+				}
+				if project != "test-project-updated" {
+					t.Errorf("project = %q, want %q", project, "test-project-updated")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := s.withTx(func(tx *sql.Tx) error {
+				return s.applyPromptUpsertTx(tx, tt.payload)
+			})
+			if err != nil {
+				t.Fatalf("applyPromptUpsertTx: %v", err)
+			}
+
+			if tt.checkFn != nil {
+				tt.checkFn(t)
+			}
+		})
+	}
+}
+
+// ─── Tests for Low Coverage Functions (<70%) ──────────────────────────────────
+
+func TestSearchEdgeCases(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "search-test", "/tmp/test"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Add observations with various content
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "bugfix",
+		Title:      "SQL injection fix",
+		Content:    "Fixed SQL injection vulnerability in user input",
+		Workspace:  "search-test",
+		Visibility: "work",
+	})
+	if err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		query       string
+		opts        SearchOptions
+		wantErr     bool
+		checkResult func(*testing.T, []SearchResult)
+	}{
+		{
+			name:  "valid query returns results",
+			query: "SQL",
+			opts: SearchOptions{
+				Workspace:  "search-test",
+				Visibility: "work",
+				Limit:      10,
+			},
+			wantErr: false,
+			checkResult: func(t *testing.T, results []SearchResult) {
+				if len(results) == 0 {
+					t.Error("expected results for valid query")
+				}
+			},
+		},
+		{
+			name:  "special characters in query",
+			query: "SQL injection",
+			opts: SearchOptions{
+				Workspace:  "search-test",
+				Visibility: "work",
+				Limit:      10,
+			},
+			wantErr: false,
+			checkResult: func(t *testing.T, results []SearchResult) {
+				if len(results) == 0 {
+					t.Error("expected results for special char query")
+				}
+			},
+		},
+		{
+			name:  "workspace filter applied",
+			query: "SQL",
+			opts: SearchOptions{
+				Workspace:  "nonexistent",
+				Visibility: "work",
+				Limit:      10,
+			},
+			wantErr: false,
+			checkResult: func(t *testing.T, results []SearchResult) {
+				if len(results) != 0 {
+					t.Errorf("expected 0 results for nonexistent workspace, got %d", len(results))
+				}
+			},
+		},
+		{
+			name:  "limit respected",
+			query: "fix",
+			opts: SearchOptions{
+				Workspace:  "search-test",
+				Visibility: "work",
+				Limit:      1,
+			},
+			wantErr: false,
+			checkResult: func(t *testing.T, results []SearchResult) {
+				if len(results) > 1 {
+					t.Errorf("expected max 1 result, got %d", len(results))
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			results, err := s.Search(tt.query, tt.opts)
+
+			if tt.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.checkResult != nil {
+				tt.checkResult(t, results)
+			}
+		})
+	}
+}
+
+func TestDeleteObservationEdgeCases(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s1", "delete-test", "/tmp/test"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		setupFn    func(*testing.T) int64
+		hardDelete bool
+		checkFn    func(*testing.T, int64)
+		wantErr    bool
+	}{
+		{
+			name: "soft delete sets deleted_at",
+			setupFn: func(t *testing.T) int64 {
+				id, err := s.AddObservation(AddObservationParams{
+					SessionID:  "s1",
+					Type:       "bugfix",
+					Title:      "Soft delete test",
+					Content:    "Should be soft deleted",
+					Workspace:  "delete-test",
+					Visibility: "work",
+				})
+				if err != nil {
+					t.Fatalf("add observation: %v", err)
+				}
+				return id
+			},
+			hardDelete: false,
+			checkFn: func(t *testing.T, obsID int64) {
+				var deletedAt sql.NullString
+				err := s.db.QueryRow(`SELECT deleted_at FROM observations WHERE id = ?`, obsID).Scan(&deletedAt)
+				if err != nil {
+					t.Fatalf("query observation: %v", err)
+				}
+				if !deletedAt.Valid {
+					t.Error("expected deleted_at to be set for soft delete")
+				}
+			},
+		},
+		{
+			name: "hard delete removes row",
+			setupFn: func(t *testing.T) int64 {
+				id, err := s.AddObservation(AddObservationParams{
+					SessionID:  "s1",
+					Type:       "bugfix",
+					Title:      "Hard delete test",
+					Content:    "Should be hard deleted",
+					Workspace:  "delete-test",
+					Visibility: "work",
+				})
+				if err != nil {
+					t.Fatalf("add observation: %v", err)
+				}
+				return id
+			},
+			hardDelete: true,
+			checkFn: func(t *testing.T, obsID int64) {
+				var count int
+				err := s.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE id = ?`, obsID).Scan(&count)
+				if err != nil {
+					t.Fatalf("query observation: %v", err)
+				}
+				if count != 0 {
+					t.Error("expected observation to be removed for hard delete")
+				}
+			},
+		},
+		{
+			name: "delete nonexistent observation",
+			setupFn: func(t *testing.T) int64 {
+				return 999999 // Non-existent ID
+			},
+			hardDelete: false,
+			wantErr:    false, // DeleteObservation doesn't error on missing ID
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			obsID := tt.setupFn(t)
+
+			err := s.DeleteObservation(obsID, tt.hardDelete)
+
+			if tt.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.checkFn != nil {
+				tt.checkFn(t, obsID)
+			}
+		})
+	}
+}
+
+func TestApplyPulledMutationEdgeCases(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("local-session", "test-project", "/tmp/test"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	targetKey := "test-target"
+
+	// Initialize sync state
+	_, err := s.db.Exec(`
+		INSERT INTO sync_state (target_key, last_pulled_seq, last_acked_seq, lifecycle, updated_at)
+		VALUES (?, 0, 0, 'pending', datetime('now'))
+	`, targetKey)
+	if err != nil {
+		t.Fatalf("insert sync state: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		mutation SyncMutation
+		wantErr  bool
+		errMsg   string
+		checkFn  func(*testing.T)
+	}{
+		{
+			name: "apply observation upsert mutation",
+			mutation: SyncMutation{
+				Seq:    1,
+				Entity: "observation",
+				Op:     "upsert",
+				Payload: func() string {
+					payload := map[string]interface{}{
+						"sync_id":    "remote-obs-1",
+						"session_id": "local-session",
+						"type":       "bugfix",
+						"title":      "Remote observation",
+						"content":    "From remote",
+						"workspace":  "test-project",
+						"visibility": "work",
+					}
+					b, _ := json.Marshal(payload)
+					return string(b)
+				}(),
+			},
+			wantErr: false,
+			checkFn: func(t *testing.T) {
+				var title string
+				err := s.db.QueryRow(`SELECT title FROM observations WHERE sync_id = ?`, "remote-obs-1").Scan(&title)
+				if err != nil {
+					t.Fatalf("query observation: %v", err)
+				}
+				if title != "Remote observation" {
+					t.Errorf("title = %q, want %q", title, "Remote observation")
+				}
+			},
+		},
+		{
+			name: "unknown entity type returns error",
+			mutation: SyncMutation{
+				Seq:     2,
+				Entity:  "unknown-type",
+				Op:      "upsert",
+				Payload: "{}",
+			},
+			wantErr: true,
+			errMsg:  "unknown",
+		},
+		{
+			name: "invalid json payload returns error",
+			mutation: SyncMutation{
+				Seq:     3,
+				Entity:  "observation",
+				Op:      "upsert",
+				Payload: "not-valid-json",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := s.ApplyPulledMutation(targetKey, tt.mutation)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("error = %q, want substring %q", err.Error(), tt.errMsg)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.checkFn != nil {
+				tt.checkFn(t)
+			}
+		})
+	}
+}
+
+// ─── PR4: InferVisibility Integration Tests ─────────────────────────────────
+
+func TestAddObservation_InferVisibility_Personal(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.CreateSession("s1", "test-workspace", "test-org"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		title   string
+		content string
+	}{
+		{"My goals", "2026 Goals", "my goals for the year"},
+		{"My health", "Health Update", "my health checkup went well"},
+		{"My finances", "Budget Review", "reviewing my finances this month"},
+		{"Personal note", "Personal Reflection", "some personal thoughts"},
+		{"Private data", "Private Info", "this is private information"},
+		{"Family event", "Family Dinner", "family gathering this weekend"},
+		{"Medical record", "Medical Appointment", "medical checkup scheduled"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id, err := s.AddObservation(AddObservationParams{
+				SessionID:  "s1",
+				Type:       "manual",
+				Title:      tt.title,
+				Content:    tt.content,
+				Workspace:  "test-workspace",
+				Visibility: "", // Empty - should auto-infer
+			})
+			if err != nil {
+				t.Fatalf("AddObservation failed: %v", err)
+			}
+
+			obs, err := s.GetObservation(id)
+			if err != nil {
+				t.Fatalf("GetObservation failed: %v", err)
+			}
+
+			if obs.Visibility != "personal" {
+				t.Errorf("Expected visibility=personal for %q + %q, got %q", tt.title, tt.content, obs.Visibility)
+			}
+		})
+	}
+}
+
+func TestAddObservation_InferVisibility_Work(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.CreateSession("s1", "test-workspace", "test-org"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		title   string
+		content string
+	}{
+		{"Bug fix", "Fixed auth bug", "bug in authentication middleware"},
+		{"Feature", "Add feature X", "feature implementation complete"},
+		{"API change", "API Update", "API endpoint refactored"},
+		{"Database", "DB Migration", "database schema updated"},
+		{"Refactor", "Code Refactor", "refactor authentication logic"},
+		{"Empty", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id, err := s.AddObservation(AddObservationParams{
+				SessionID:  "s1",
+				Type:       "manual",
+				Title:      tt.title,
+				Content:    tt.content,
+				Workspace:  "test-workspace",
+				Visibility: "", // Empty - should auto-infer
+			})
+			if err != nil {
+				t.Fatalf("AddObservation failed: %v", err)
+			}
+
+			obs, err := s.GetObservation(id)
+			if err != nil {
+				t.Fatalf("GetObservation failed: %v", err)
+			}
+
+			if obs.Visibility != "work" {
+				t.Errorf("Expected visibility=work for %q + %q, got %q", tt.title, tt.content, obs.Visibility)
+			}
+		})
+	}
+}
+
+func TestAddObservation_ExplicitVisibility_NotOverridden(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.CreateSession("s1", "test-workspace", "test-org"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Explicitly set visibility=work even though content suggests personal
+	id, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "manual",
+		Title:      "Health Tracking",
+		Content:    "my health metrics",
+		Workspace:  "test-workspace",
+		Visibility: "work", // Explicitly set - should NOT be overridden
+	})
+	if err != nil {
+		t.Fatalf("AddObservation failed: %v", err)
+	}
+
+	obs, err := s.GetObservation(id)
+	if err != nil {
+		t.Fatalf("GetObservation failed: %v", err)
+	}
+
+	if obs.Visibility != "work" {
+		t.Errorf("Expected explicit visibility=work to be preserved, got %q", obs.Visibility)
+	}
+
+	// Explicitly set visibility=personal even though content suggests work
+	id2, err := s.AddObservation(AddObservationParams{
+		SessionID:  "s1",
+		Type:       "manual",
+		Title:      "API Design",
+		Content:    "bug fix and refactor",
+		Workspace:  "test-workspace",
+		Visibility: "personal", // Explicitly set - should NOT be overridden
+	})
+	if err != nil {
+		t.Fatalf("AddObservation failed: %v", err)
+	}
+
+	obs2, err := s.GetObservation(id2)
+	if err != nil {
+		t.Fatalf("GetObservation failed: %v", err)
+	}
+
+	if obs2.Visibility != "personal" {
+		t.Errorf("Expected explicit visibility=personal to be preserved, got %q", obs2.Visibility)
+	}
+}

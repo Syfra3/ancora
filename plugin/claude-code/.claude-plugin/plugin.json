@@ -1,0 +1,11 @@
+{
+  "name": "ancora",
+  "description": "Persistent memory for AI coding agents. Survives across sessions and compactions.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Syfra"
+  },
+  "homepage": "https://github.com/Syfra3/ancora",
+  "repository": "https://github.com/Syfra3/ancora",
+  "license": "MIT"
+}
