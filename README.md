@@ -1,5 +1,6 @@
 <div align="center">
   <img src="assets/ancora-logo.png" alt="Ancora Logo" width="200"/>
+
   **Scalable memory for real AI agent orchestration and shared knowledge**
   
   > Persistent memory for AI agents. Local-first, open source.
