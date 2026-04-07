@@ -344,45 +344,64 @@ func (m WizardModel) View() string {
 }
 
 var (
+	// Syfra/Ancora color palette (matching main TUI)
+	colorLavender = lipgloss.Color("#C8B6FF")
+	colorMint     = lipgloss.Color("#B4FFDD")
+	colorMintMid  = lipgloss.Color("#CEE7F0")
+	colorSubtext  = lipgloss.Color("#8a8a8e")
+	colorText     = lipgloss.Color("#e0e0e2")
+	colorRed      = lipgloss.Color("#FF9EB8")
+
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("39")). // Blue
+			Foreground(colorLavender).
 			Padding(0, 1)
 
 	subtitleStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")). // Gray
+			Foreground(colorSubtext).
 			Padding(0, 1)
 
 	boxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("39")).
 			Padding(1, 2).
 			Width(60)
 
 	successStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("42")). // Green
+			Foreground(colorMint).
 			Bold(true)
 
 	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196")). // Red
+			Foreground(colorRed).
 			Bold(true)
 
 	hintStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")). // Gray
+			Foreground(colorSubtext).
 			Italic(true)
-
-	bannerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("39"))
 )
 
-var asciiBanner = `
-██████╗ ███╗   ██╗ ██████╗ ██████╗ ██████╗  █████╗ 
-██╔══██╗████╗  ██║██╔════╝██╔═══██╗██╔══██╗██╔══██╗
-██████╔╝██╔██╗ ██║██║     ██║   ██║██████╔╝███████║
-██╔══██║██║╚██╗██║██║     ██║   ██║██╔══██╗██╔══██║
-██║  ██║██║ ╚████║╚██████╗╚██████╔╝██║  ██║██║  ██║
-╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
-`
+// renderAsciiLogo renders the ASCII art with gradient colors (matching main TUI)
+func renderAsciiLogo() string {
+	logoText := []string{
+		` █████╗ ███╗   ██╗ ██████╗ ██████╗ ██████╗  █████╗ `,
+		`██╔══██╗████╗  ██║██╔════╝██╔═══██╗██╔══██╗██╔══██╗`,
+		`███████║██╔██╗ ██║██║     ██║   ██║██████╔╝███████║`,
+		`██╔══██║██║╚██╗██║██║     ██║   ██║██╔══██╗██╔══██║`,
+		`██║  ██║██║ ╚████║╚██████╗╚██████╔╝██║  ██║██║  ██║`,
+		`╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝`,
+	}
+
+	// Gradient colors (Syfra palette: Lavender to Mint)
+	colors := []lipgloss.Color{
+		colorLavender, colorLavender, colorMintMid,
+		colorMint, colorMint, colorMint,
+	}
+
+	var b strings.Builder
+	for i, line := range logoText {
+		b.WriteString(lipgloss.NewStyle().Foreground(colors[i]).Bold(true).Render(line) + "\n")
+	}
+
+	return b.String()
+}
 
 func (m WizardModel) viewWelcome() string {
 	var b strings.Builder
@@ -393,7 +412,7 @@ func (m WizardModel) viewWelcome() string {
 	}
 
 	b.WriteString(boxStyle.Render(
-		bannerStyle.Render(asciiBanner) + "\n\n" +
+		renderAsciiLogo() + "\n" +
 			titleStyle.Render("Ancora Setup"+versionStr) + "\n\n" +
 			"Welcome to Ancora Memory System\n\n" +
 			"This wizard will configure:\n" +
