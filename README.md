@@ -560,7 +560,7 @@ make release
 
 ## Support
 
-For questions or issues, contact: support@ancora.co
+For questions or issues, contact: support@syfra.co
 
 ## License
 
