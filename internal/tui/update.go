@@ -41,6 +41,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.IsFullyInstalled = msg.isInstalled
 		return m, nil
 
+	case mcpStatusMsg:
+		m.MCPRunning = msg.running
+		return m, nil
+
 	case statsLoadedMsg:
 		if msg.err != nil {
 			m.ErrorMsg = msg.err.Error()
@@ -177,6 +181,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.PurgeError = ""
 		return m, nil
 
+	case uninstallResultMsg:
+		if msg.err != nil {
+			m.UninstallError = msg.err.Error()
+			return m, nil
+		}
+		m.UninstallDone = true
+		m.UninstallError = ""
+		return m, nil
+
 	case setupEnvCompleteMsg:
 		m.SetupEnvRunning = false
 		if msg.err != nil {
@@ -249,6 +262,8 @@ func (m Model) handleKeyPress(key string) (tea.Model, tea.Cmd) {
 		return m.handleMoveObservationKeys(key)
 	case ScreenPurge:
 		return m.handlePurgeKeys(key)
+	case ScreenUninstall:
+		return m.handleUninstallKeys(key)
 	}
 	return m, nil
 }
@@ -278,7 +293,8 @@ func getDashboardMenuItems(isInstalled bool) []MenuItem {
 		{"Recent observations", "Browse latest saved memories", "recent"},
 		{"Browse sessions", "View all coding sessions", "sessions"},
 		{"Browse projects", "View projects with sync status and scope", "projects"},
-		{"Upgrade/Update environment", "Update embedding model and plugins", "setup"},
+		{"Update Ancora", "Update to new version and reinstall without losing data", "setup"},
+		{"Uninstall Ancora", "Remove Ancora completely from your system", "uninstall"},
 		{"Purge database", "DELETE ALL data - observations, sessions, prompts", "purge"},
 		{"Exit", "Close the TUI", "exit"},
 	}
@@ -390,6 +406,14 @@ func (m Model) handleDashboardSelection() (tea.Model, tea.Cmd) {
 		m.PurgeConfirmCursor = 0
 		m.PurgeResult = nil
 		m.PurgeError = ""
+		return m, nil
+
+	case "uninstall":
+		m.PrevScreen = ScreenDashboard
+		m.Screen = ScreenUninstall
+		m.UninstallConfirmCursor = 0
+		m.UninstallDone = false
+		m.UninstallError = ""
 		return m, nil
 
 	case "exit":
@@ -1038,6 +1062,44 @@ func (m Model) handlePurgeKeys(key string) (tea.Model, tea.Cmd) {
 		if m.PurgeConfirmCursor == 1 {
 			// User confirmed - execute purge
 			return m, purgeDatabase(m.store)
+		} else {
+			// User chose "No" - go back
+			m.Screen = ScreenDashboard
+			m.Cursor = 0
+			return m, nil
+		}
+	case "esc", "q":
+		m.Screen = ScreenDashboard
+		m.Cursor = 0
+		return m, nil
+	}
+	return m, nil
+}
+
+// ─── Uninstall ──────────────────────────────────────────────────────────────
+
+func (m Model) handleUninstallKeys(key string) (tea.Model, tea.Cmd) {
+	// If uninstall is done (success), any key exits the application
+	if m.UninstallDone {
+		if key == "esc" || key == "q" || key == "enter" {
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+
+	switch key {
+	case "up", "k":
+		if m.UninstallConfirmCursor > 0 {
+			m.UninstallConfirmCursor--
+		}
+	case "down", "j":
+		if m.UninstallConfirmCursor < 1 {
+			m.UninstallConfirmCursor++
+		}
+	case "enter":
+		if m.UninstallConfirmCursor == 1 {
+			// User confirmed - execute uninstall
+			return m, uninstallAncora()
 		} else {
 			// User chose "No" - go back
 			m.Screen = ScreenDashboard

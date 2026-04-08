@@ -11,7 +11,9 @@ package tui
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/Syfra3/ancora/internal/embed"
 	"github.com/Syfra3/ancora/internal/setup"
@@ -42,6 +44,7 @@ const (
 	ScreenSetupEnv
 	ScreenMoveObservation
 	ScreenPurge
+	ScreenUninstall
 )
 
 // ─── Custom Messages ─────────────────────────────────────────────────────────
@@ -114,6 +117,10 @@ type installationCheckMsg struct {
 	isInstalled bool
 }
 
+type uninstallResultMsg struct {
+	err error
+}
+
 // ProjectWithEnrollment extends store.ProjectStats with sync enrollment status
 type ProjectWithEnrollment struct {
 	store.ProjectStats
@@ -142,6 +149,7 @@ type Model struct {
 	// Dashboard
 	Stats            *store.Stats
 	IsFullyInstalled bool // true if database + embeddings are available
+	MCPRunning       bool // true if MCP server process is detected
 
 	// Search
 	SearchInput   textinput.Model
@@ -206,6 +214,11 @@ type Model struct {
 	PurgeResult        *store.PurgeResult
 	PurgeError         string
 	PurgeConfirmCursor int // 0 = "No, go back", 1 = "Yes, delete everything"
+
+	// Uninstall
+	UninstallConfirmCursor int  // 0 = "No, go back", 1 = "Yes, uninstall"
+	UninstallDone          bool // true = uninstall completed
+	UninstallError         string
 }
 
 // New creates a new TUI model connected to the given store.
@@ -236,6 +249,7 @@ func (m Model) Init() tea.Cmd {
 		loadStats(m.store),
 		checkForUpdate(m.Version),
 		checkInstallation,
+		checkMCPStatus,
 		tea.EnterAltScreen,
 	)
 }
@@ -247,6 +261,27 @@ func checkInstallation() tea.Msg {
 	return installationCheckMsg{
 		isInstalled: err == nil,
 	}
+}
+
+// checkMCPStatus checks if the MCP server process is running
+func checkMCPStatus() tea.Msg {
+	return mcpStatusMsg{
+		running: isMCPRunning(),
+	}
+}
+
+type mcpStatusMsg struct {
+	running bool
+}
+
+// isMCPRunning checks if the ancora MCP server is running using pgrep
+func isMCPRunning() bool {
+	cmd := exec.Command("pgrep", "-f", "ancora mcp")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(output)) != ""
 }
 
 // ─── Commands (data loading) ─────────────────────────────────────────────────
@@ -370,6 +405,24 @@ func purgeDatabase(s *store.Store) tea.Cmd {
 	return func() tea.Msg {
 		result, err := s.PurgeAll()
 		return purgeResultMsg{result: result, err: err}
+	}
+}
+
+func uninstallAncora() tea.Cmd {
+	return func() tea.Msg {
+		// Remove embedding model
+		modelPath := filepath.Join(embed.ModelInstallPath(), embed.ModelFileName)
+		if err := os.Remove(modelPath); err != nil && !os.IsNotExist(err) {
+			return uninstallResultMsg{err: err}
+		}
+
+		// Remove model directory if empty
+		modelDir := embed.ModelInstallPath()
+		if err := os.Remove(modelDir); err != nil && !os.IsNotExist(err) {
+			// Directory not empty or other error - ignore
+		}
+
+		return uninstallResultMsg{err: nil}
 	}
 }
 

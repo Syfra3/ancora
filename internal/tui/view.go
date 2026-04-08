@@ -46,12 +46,22 @@ func renderTagline(version string) string {
 
 // renderStatusLine renders the operational status indicator
 func (m Model) renderStatusLine() string {
+	// Main status
 	statusDot := lipgloss.NewStyle().Foreground(colorMint).Render("●")
 	statusText := lipgloss.NewStyle().Foreground(colorSubtext).Render("ready")
 	if m.Stats != nil {
 		statusText = lipgloss.NewStyle().Foreground(colorMint).Render("operational")
 	}
-	return fmt.Sprintf("Status: %s %s", statusDot, statusText)
+
+	// MCP status
+	mcpDot := lipgloss.NewStyle().Foreground(colorRed).Render("●")
+	mcpText := lipgloss.NewStyle().Foreground(colorSubtext).Render("offline")
+	if m.MCPRunning {
+		mcpDot = lipgloss.NewStyle().Foreground(colorMint).Render("●")
+		mcpText = lipgloss.NewStyle().Foreground(colorMint).Render("operational")
+	}
+
+	return fmt.Sprintf("Status: %s %s  | MCP Status: %s %s", statusDot, statusText, mcpDot, mcpText)
 }
 
 // renderSeparator renders a horizontal separator line
@@ -130,6 +140,8 @@ func (m Model) View() string {
 		content = m.viewMoveObservation()
 	case ScreenPurge:
 		content = m.viewPurge()
+	case ScreenUninstall:
+		content = m.viewUninstall()
 	default:
 		content = "Unknown screen"
 	}
@@ -154,11 +166,11 @@ func (m Model) viewDashboard() string {
 	menuLabelStyle := lipgloss.NewStyle().
 		Foreground(colorText).
 		Bold(false).
-		Width(25)
+		Width(22)
 
 	menuDescStyle := lipgloss.NewStyle().
 		Foreground(colorSubtext).
-		Width(40)
+		Width(70)
 
 	menuItems := getDashboardMenuItems(m.IsFullyInstalled)
 
@@ -928,11 +940,11 @@ func (m Model) viewSetupEnv() string {
 		menuLabelStyle := lipgloss.NewStyle().
 			Foreground(colorText).
 			Bold(false).
-			Width(25)
+			Width(30)
 
 		menuDescStyle := lipgloss.NewStyle().
 			Foreground(colorSubtext).
-			Width(40)
+			Width(60)
 
 		setupEnvMenuItems := []MenuItem{
 			{"OpenCode", "Install MCP plugin for OpenCode agent", "opencode"},
@@ -1162,6 +1174,52 @@ func (m Model) viewPurge() string {
 			cursor := "  "
 			style := menuLabelStyle
 			if i == m.PurgeConfirmCursor {
+				cursor = lipgloss.NewStyle().Foreground(colorMint).Render("▸ ")
+				style = menuLabelStyle.Copy().Foreground(colorLavender)
+			}
+			b.WriteString(fmt.Sprintf("%s%s\n", cursor, style.Render(opt)))
+		}
+
+		b.WriteString(renderFooter("j/k navigate • enter confirm • esc cancel"))
+	}
+
+	return b.String()
+}
+
+// ─── Uninstall ───────────────────────────────────────────────────────────────
+
+func (m Model) viewUninstall() string {
+	var b strings.Builder
+
+	// Header with section title
+	b.WriteString(m.renderHeader("⚠️  UNINSTALL ANCORA"))
+
+	// Show uninstall warning
+	b.WriteString(warningStyle.Render("This will completely remove Ancora from your system:\n"))
+	b.WriteString("  • Delete embedding model and all cached data\n")
+	b.WriteString("  • Remove configuration files\n")
+	b.WriteString("  • Database will be preserved (run Purge first to delete)\n\n")
+
+	// Show confirmation prompt or results
+	if m.UninstallDone {
+		// Uninstall completed
+		b.WriteString(successStyle.Render("✅ Ancora uninstalled successfully!\n\n"))
+		b.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("You can safely delete the database manually if needed.\n"))
+		b.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Press any key to exit"))
+	} else if m.UninstallError != "" {
+		// Uninstall failed
+		b.WriteString(errorStyle.Render("Error: " + m.UninstallError + "\n\n"))
+		b.WriteString(renderFooter("esc go back"))
+	} else {
+		// Show confirmation prompt
+		b.WriteString(warningStyle.Render("Are you sure? This cannot be undone!\n\n"))
+
+		// Options
+		options := []string{"No, go back", "Yes, uninstall Ancora"}
+		for i, opt := range options {
+			cursor := "  "
+			style := menuLabelStyle
+			if i == m.UninstallConfirmCursor {
 				cursor = lipgloss.NewStyle().Foreground(colorMint).Render("▸ ")
 				style = menuLabelStyle.Copy().Foreground(colorLavender)
 			}

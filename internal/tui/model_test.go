@@ -40,24 +40,24 @@ func newTestFixture(t *testing.T) testFixture {
 	}
 
 	obsID, err := s.AddObservation(store.AddObservationParams{
-		SessionID: "session-1",
-		Type:      "bugfix",
-		Title:     "Needle observation",
-		Content:   "needle content for deterministic search",
-		Workspace:   "ancora",
-		Visibility:     "project",
+		SessionID:  "session-1",
+		Type:       "bugfix",
+		Title:      "Needle observation",
+		Content:    "needle content for deterministic search",
+		Workspace:  "ancora",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add first observation: %v", err)
 	}
 
 	secondObs, err := s.AddObservation(store.AddObservationParams{
-		SessionID: "session-1",
-		Type:      "decision",
-		Title:     "Second observation",
-		Content:   "timeline sibling",
-		Workspace:   "ancora",
-		Visibility:     "project",
+		SessionID:  "session-1",
+		Type:       "decision",
+		Title:      "Second observation",
+		Content:    "timeline sibling",
+		Workspace:  "ancora",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("add second observation: %v", err)
@@ -248,4 +248,14 @@ func TestInstallAgentCommand(t *testing.T) {
 			t.Fatalf("expected install error, got %v", res.err)
 		}
 	})
+}
+
+func TestMCPStatusCheck(t *testing.T) {
+	msg := checkMCPStatus()
+	status, ok := msg.(mcpStatusMsg)
+	if !ok {
+		t.Fatalf("message type = %T, want mcpStatusMsg", msg)
+	}
+	// We can't guarantee MCP is running in test environment, just verify the message type
+	t.Logf("MCP running status: %v", status.running)
 }
