@@ -195,11 +195,11 @@ func registerTools(srv *server.MCPServer, s *store.Store, cfg MCPConfig, allowli
 				mcp.WithString("type",
 					mcp.Description("Filter by type: tool_use, file_change, command, file_read, search, manual, decision, architecture, bugfix, pattern"),
 				),
-				mcp.WithString("project",
-					mcp.Description("Optional project filter; when omitted, searches across all local memory"),
+				mcp.WithString("workspace",
+					mcp.Description("Optional workspace filter; when omitted, searches across all local memory"),
 				),
-				mcp.WithString("scope",
-					mcp.Description("Filter by scope: 'project' (default) for work knowledge, 'personal' for private life knowledge"),
+				mcp.WithString("visibility",
+					mcp.Description("Filter by visibility: 'work' (default) for work knowledge, 'personal' for private life knowledge"),
 				),
 				mcp.WithNumber("limit",
 					mcp.Description("Max results (default: 10, max: 20)"),
@@ -256,16 +256,19 @@ Examples:
 					mcp.Description("Category: decision, architecture, bugfix, pattern, config, discovery, learning (default: manual)"),
 				),
 				mcp.WithString("session_id",
-					mcp.Description("Session ID to associate with (default: manual-save-{project})"),
+					mcp.Description("Session ID to associate with (default: manual-save-{workspace})"),
 				),
-				mcp.WithString("project",
-					mcp.Description("Project name"),
+				mcp.WithString("workspace",
+					mcp.Description("Workspace/project name"),
 				),
-				mcp.WithString("scope",
-					mcp.Description("Scope for this observation: 'project' (default) or 'personal'. Use 'project' for any work knowledge — coding, research, writing, business (sync eligibility controlled by project enrollment). Use 'personal' for private life knowledge (finance, health, goals) — NEVER synced to Syfra Cloud."),
+				mcp.WithString("visibility",
+					mcp.Description("Scope for this observation: 'work' (default) or 'personal'. Use 'work' for any work knowledge — coding, research, writing, business (sync eligibility controlled by project enrollment). Use 'personal' for private life knowledge (finance, health, goals) — NEVER synced to Syfra Cloud."),
+				),
+				mcp.WithString("organization",
+					mcp.Description("Organization name for Syfra Cloud (e.g. 'glim', 'syfra'). Only meaningful when visibility=work."),
 				),
 				mcp.WithString("topic_key",
-					mcp.Description("Optional topic identifier for upserts (e.g. architecture/auth-model). Reuses and updates the latest observation in same project+scope."),
+					mcp.Description("Optional topic identifier for upserts (e.g. architecture/auth-model). Reuses and updates the latest observation in same workspace+visibility."),
 				),
 			),
 			handleSave(s, cfg),
@@ -296,11 +299,14 @@ Examples:
 				mcp.WithString("type",
 					mcp.Description("New type/category"),
 				),
-				mcp.WithString("project",
-					mcp.Description("New project value"),
+				mcp.WithString("workspace",
+					mcp.Description("New workspace value"),
 				),
-				mcp.WithString("scope",
-					mcp.Description("New scope: 'project' or 'personal'. Changing to 'personal' will prevent this observation from ever being synced to Syfra Cloud."),
+				mcp.WithString("visibility",
+					mcp.Description("New visibility: 'work' or 'personal'. Changing to 'personal' will prevent this observation from ever being synced to Syfra Cloud."),
+				),
+				mcp.WithString("organization",
+					mcp.Description("New organization value for Syfra Cloud"),
 				),
 				mcp.WithString("topic_key",
 					mcp.Description("New topic key (normalized internally)"),
@@ -393,11 +399,11 @@ Examples:
 				mcp.WithDestructiveHintAnnotation(false),
 				mcp.WithIdempotentHintAnnotation(true),
 				mcp.WithOpenWorldHintAnnotation(false),
-				mcp.WithString("project",
-					mcp.Description("Filter by project (omit for all projects)"),
+				mcp.WithString("workspace",
+					mcp.Description("Filter by workspace (omit for all workspaces)"),
 				),
-				mcp.WithString("scope",
-					mcp.Description("Filter observations by scope: 'project' (default) for work knowledge, 'personal' for private life knowledge"),
+				mcp.WithString("visibility",
+					mcp.Description("Filter observations by visibility: 'work' (default) for work knowledge, 'personal' for private life knowledge"),
 				),
 				mcp.WithNumber("limit",
 					mcp.Description("Number of observations to retrieve (default: 20)"),
@@ -637,14 +643,14 @@ func handleSearch(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		query, _ := req.GetArguments()["query"].(string)
 		typ, _ := req.GetArguments()["type"].(string)
-		project, _ := req.GetArguments()["project"].(string)
-		scope, _ := req.GetArguments()["scope"].(string)
+		workspace, _ := req.GetArguments()["workspace"].(string)
+		visibility, _ := req.GetArguments()["visibility"].(string)
 		limit := intArg(req, "limit", 10)
 
 		searchResults, searchMode, err := search.SearchWithOptions(query, store.SearchOptions{
 			Type:       typ,
-			Workspace:  project,
-			Visibility: scope,
+			Workspace:  workspace,
+			Visibility: visibility,
 			Limit:      limit,
 		}, cfg.Embedder, s)
 		if err != nil {
@@ -692,61 +698,63 @@ func handleSave(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		content, _ := req.GetArguments()["content"].(string)
 		typ, _ := req.GetArguments()["type"].(string)
 		sessionID, _ := req.GetArguments()["session_id"].(string)
-		project, _ := req.GetArguments()["project"].(string)
-		scope, _ := req.GetArguments()["scope"].(string)
+		workspace, _ := req.GetArguments()["workspace"].(string)
+		visibility, _ := req.GetArguments()["visibility"].(string)
+		organization, _ := req.GetArguments()["organization"].(string)
 		topicKey, _ := req.GetArguments()["topic_key"].(string)
 
-		// Apply default project when LLM sends empty
-		if project == "" {
-			project = cfg.DefaultProject
+		// Apply default workspace when LLM sends empty
+		if workspace == "" {
+			workspace = cfg.DefaultProject
 		}
-		// Normalize project name and capture warning
-		normalized, normWarning := store.NormalizeProject(project)
-		project = normalized
+		// Normalize workspace name and capture warning
+		normalized, normWarning := store.NormalizeProject(workspace)
+		workspace = normalized
 
 		if typ == "" {
 			typ = "manual"
 		}
 		if sessionID == "" {
-			sessionID = defaultSessionID(project)
+			sessionID = defaultSessionID(workspace)
 		}
 		suggestedTopicKey := suggestTopicKey(typ, title, content)
 
-		// Check for similar existing projects (only when this project has no existing observations)
+		// Check for similar existing workspaces (only when this workspace has no existing observations)
 		var similarWarning string
-		if project != "" {
+		if workspace != "" {
 			existingNames, _ := s.ListProjectNames()
 			isNew := true
 			for _, e := range existingNames {
-				if e == project {
+				if e == workspace {
 					isNew = false
 					break
 				}
 			}
 			if isNew && len(existingNames) > 0 {
-				matches := projectpkg.FindSimilar(project, existingNames, 3)
+				matches := projectpkg.FindSimilar(workspace, existingNames, 3)
 				if len(matches) > 0 {
 					bestMatch := matches[0].Name
 					// Cheap count query instead of full ListProjectsWithStats
 					obsCount, _ := s.CountObservationsForProject(bestMatch)
-					similarWarning = fmt.Sprintf("⚠️ Project %q has no memories. Similar project found: %q (%d memories). Consider using that name instead.", project, bestMatch, obsCount)
+					similarWarning = fmt.Sprintf("⚠️ Workspace %q has no memories. Similar workspace found: %q (%d memories). Consider using that name instead.", workspace, bestMatch, obsCount)
 				}
 			}
 		}
 
 		// Ensure the session exists
-		s.CreateSession(sessionID, project, "")
+		s.CreateSession(sessionID, workspace, "")
 
 		truncated := len(content) > s.MaxObservationLength()
 
 		_, err := s.AddObservation(store.AddObservationParams{
-			SessionID:  sessionID,
-			Type:       typ,
-			Title:      title,
-			Content:    content,
-			Workspace:  project,
-			Visibility: scope,
-			TopicKey:   topicKey,
+			SessionID:    sessionID,
+			Type:         typ,
+			Title:        title,
+			Content:      content,
+			Workspace:    workspace,
+			Visibility:   visibility,
+			Organization: organization,
+			TopicKey:     topicKey,
 		})
 		if err != nil {
 			return mcp.NewToolResultError("Failed to save: " + err.Error()), nil
@@ -894,16 +902,16 @@ func handleSavePrompt(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 
 func handleContext(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		project, _ := req.GetArguments()["project"].(string)
-		scope, _ := req.GetArguments()["scope"].(string)
+		workspace, _ := req.GetArguments()["workspace"].(string)
+		visibility, _ := req.GetArguments()["visibility"].(string)
 
-		// Apply default project when LLM sends empty
-		if project == "" {
-			project = cfg.DefaultProject
+		// Apply default workspace when LLM sends empty
+		if workspace == "" {
+			workspace = cfg.DefaultProject
 		}
-		project, _ = store.NormalizeProject(project)
+		workspace, _ = store.NormalizeProject(workspace)
 
-		context, err := s.FormatContext(project, scope)
+		context, err := s.FormatContext(workspace, visibility)
 		if err != nil {
 			return mcp.NewToolResultError("Failed to get context: " + err.Error()), nil
 		}

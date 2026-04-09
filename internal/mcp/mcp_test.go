@@ -87,10 +87,10 @@ func TestHandleSaveSuggestsTopicKeyWhenMissing(t *testing.T) {
 	h := handleSave(s, MCPConfig{})
 
 	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"title":   "Auth architecture",
-		"content": "Define boundaries for auth middleware",
-		"type":    "architecture",
-		"project": "ancora",
+		"title":     "Auth architecture",
+		"content":   "Define boundaries for auth middleware",
+		"type":      "architecture",
+		"workspace": "ancora",
 	}}}
 
 	res, err := h(context.Background(), req)
@@ -115,7 +115,7 @@ func TestHandleSaveDoesNotSuggestWhenTopicKeyProvided(t *testing.T) {
 		"title":     "Auth architecture",
 		"content":   "Define boundaries for auth middleware",
 		"type":      "architecture",
-		"project":   "ancora",
+		"workspace": "ancora",
 		"topic_key": "architecture/auth-model",
 	}}}
 
@@ -305,10 +305,10 @@ func TestHandleSearchAndCRUDHandlers(t *testing.T) {
 
 	search := handleSearch(s, MCPConfig{})
 	searchReq := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"query":   "panic",
-		"project": "ancora",
-		"scope":   "project",
-		"limit":   5.0,
+		"query":      "panic",
+		"workspace":  "ancora",
+		"visibility": "work",
+		"limit":      5.0,
 	}}}
 	searchRes, err := search(context.Background(), searchReq)
 	if err != nil {
@@ -395,8 +395,8 @@ func TestHandlePromptContextStatsTimelineAndSessionHandlers(t *testing.T) {
 
 	contextHandler := handleContext(s, MCPConfig{})
 	contextReq := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"project": "ancora",
-		"scope":   "project",
+		"workspace":  "ancora",
+		"visibility": "work",
 	}}}
 	contextRes, err := contextHandler(context.Background(), contextReq)
 	if err != nil {
@@ -711,9 +711,9 @@ func TestMCPAdditionalCoverageBranches(t *testing.T) {
 
 	save := handleSave(s, MCPConfig{})
 	saveReq := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"title":   "Default values",
-		"content": "Ensure defaults for type and session are used",
-		"project": "ancora",
+		"title":     "Default values",
+		"content":   "Ensure defaults for type and session are used",
+		"workspace": "ancora",
 	}}}
 	saveRes, err := save(context.Background(), saveReq)
 	if err != nil {
@@ -776,13 +776,13 @@ func TestHandleUpdateAcceptsAllOptionalFields(t *testing.T) {
 	}
 
 	res, err := handleUpdate(s)(context.Background(), mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"id":        float64(id),
-		"title":     "Updated",
-		"content":   "Updated content",
-		"type":      "architecture",
-		"project":   "ancora",
-		"scope":     "personal",
-		"topic_key": "architecture/auth-model",
+		"id":         float64(id),
+		"title":      "Updated",
+		"content":    "Updated content",
+		"type":       "architecture",
+		"workspace":  "ancora",
+		"visibility": "personal",
+		"topic_key":  "architecture/auth-model",
 	}}})
 	if err != nil {
 		t.Fatalf("update handler error: %v", err)
@@ -799,7 +799,7 @@ func TestHandleContextWithSessionOnlyUsesNoneProjects(t *testing.T) {
 	}
 
 	res, err := handleContext(s, MCPConfig{})(context.Background(), mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"project": "ancora",
+		"workspace": "ancora",
 	}}})
 	if err != nil {
 		t.Fatalf("context handler error: %v", err)
@@ -1352,24 +1352,24 @@ func TestHandleSaveCreatesProjectScopedSession(t *testing.T) {
 	s := newMCPTestStore(t)
 	h := handleSave(s, MCPConfig{})
 
-	// Save from project A without session_id
+	// Save from workspace A without session_id
 	reqA := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"title":   "Decision A",
-		"content": "Architecture for project A",
-		"type":    "architecture",
-		"project": "projectA",
+		"title":     "Decision A",
+		"content":   "Architecture for project A",
+		"type":      "architecture",
+		"workspace": "projectA",
 	}}}
 	resA, err := h(context.Background(), reqA)
 	if err != nil || resA.IsError {
 		t.Fatalf("save A: err=%v isError=%v", err, resA.IsError)
 	}
 
-	// Save from project B without session_id
+	// Save from workspace B without session_id
 	reqB := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"title":   "Decision B",
-		"content": "Architecture for project B",
-		"type":    "architecture",
-		"project": "projectB",
+		"title":     "Decision B",
+		"content":   "Architecture for project B",
+		"type":      "architecture",
+		"workspace": "projectB",
 	}}}
 	resB, err := h(context.Background(), reqB)
 	if err != nil || resB.IsError {
@@ -1470,7 +1470,7 @@ func TestExplicitSessionIDBypassesDefault(t *testing.T) {
 		"title":      "Explicit session test",
 		"content":    "Testing explicit session ID",
 		"type":       "discovery",
-		"project":    "myproject",
+		"workspace":  "myproject",
 		"session_id": "custom-session-123",
 	}}}
 	res, err := h(context.Background(), req)
@@ -1562,9 +1562,9 @@ func TestHandleSaveNormalizationWarning(t *testing.T) {
 
 	// Send mixed-case project name — should be normalized and warning returned
 	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"title":   "Normalization test",
-		"content": "Testing project name normalization",
-		"project": "Ancora", // uppercase — should normalize to "ancora"
+		"title":     "Normalization test",
+		"content":   "Testing project name normalization",
+		"workspace": "Ancora", // uppercase — should normalize to "ancora"
 	}}}
 
 	res, err := h(context.Background(), req)
@@ -1596,20 +1596,20 @@ func TestHandleSaveSimilarProjectWarning(t *testing.T) {
 
 	// First save to "ancora" to establish an existing project
 	req1 := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"title":   "First memory",
-		"content": "Memory for ancora project",
-		"project": "ancora",
+		"title":     "First memory",
+		"content":   "Memory for ancora workspace",
+		"workspace": "ancora",
 	}}}
 	res1, err := h(context.Background(), req1)
 	if err != nil || res1.IsError {
 		t.Fatalf("first save: err=%v isError=%v text=%s", err, res1.IsError, callResultText(t, res1))
 	}
 
-	// Now save to "anora" (typo) — should warn about similar project "ancora"
+	// Now save to "anora" (typo) — should warn about similar workspace "ancora"
 	req2 := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"title":   "Typo project memory",
-		"content": "Memory saved under typo project name",
-		"project": "anora", // typo — Levenshtein distance 1 from "ancora" (missing 'c')
+		"title":     "Typo project memory",
+		"content":   "Memory saved under typo workspace name",
+		"workspace": "anora", // typo — Levenshtein distance 1 from "ancora" (missing 'c')
 	}}}
 	res2, err := h(context.Background(), req2)
 	if err != nil {
@@ -1620,8 +1620,8 @@ func TestHandleSaveSimilarProjectWarning(t *testing.T) {
 	}
 
 	text := callResultText(t, res2)
-	if !strings.Contains(text, "Similar project") {
-		t.Fatalf("expected similar project warning, got %q", text)
+	if !strings.Contains(text, "Similar workspace") {
+		t.Fatalf("expected similar workspace warning, got %q", text)
 	}
 	// Verify spec-compliant format: ⚠️ emoji, obs count, and "Consider using"
 	if !strings.Contains(text, "⚠️") {
@@ -1639,18 +1639,18 @@ func TestHandleSaveNoSimilarWarningWhenProjectExists(t *testing.T) {
 	s := newMCPTestStore(t)
 	h := handleSave(s, MCPConfig{})
 
-	// Save twice to the same project — second save should NOT show similar project warning
+	// Save twice to the same workspace — second save should NOT show similar workspace warning
 	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"title":   "First memory",
-		"content": "Memory content",
-		"project": "ancora",
+		"title":     "First memory",
+		"content":   "Memory content",
+		"workspace": "ancora",
 	}}}
-	h(context.Background(), req) // first save establishes the project
+	h(context.Background(), req) // first save establishes the workspace
 
 	req2 := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"title":   "Second memory",
-		"content": "Another memory content",
-		"project": "ancora",
+		"title":     "Second memory",
+		"content":   "Another memory content",
+		"workspace": "ancora",
 	}}}
 	res2, err := h(context.Background(), req2)
 	if err != nil || res2.IsError {
@@ -1803,11 +1803,11 @@ func TestHandleSaveDefaultProjectDoesNotOverrideExplicit(t *testing.T) {
 	cfg := MCPConfig{DefaultProject: "default-project"}
 	h := handleSave(s, cfg)
 
-	// Explicit project should override default
+	// Explicit workspace should override default
 	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"title":   "Explicit project test",
-		"content": "Should go to explicit-project, not default-project",
-		"project": "explicit-project",
+		"title":     "Explicit project test",
+		"content":   "Should go to explicit-project, not default-project",
+		"workspace": "explicit-project",
 	}}}
 	res, err := h(context.Background(), req)
 	if err != nil || res.IsError {
@@ -1913,9 +1913,9 @@ func TestHybridSearchWithMockEmbedder(t *testing.T) {
 	search := handleSearch(s, cfg)
 
 	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"query":   "Intel",
-		"project": "test",
-		"limit":   10.0,
+		"query":     "Intel",
+		"workspace": "test",
+		"limit":     10.0,
 	}}}
 
 	res, err := search(context.Background(), req)
@@ -1965,9 +1965,9 @@ func TestHybridSearchGracefulFallback(t *testing.T) {
 	search := handleSearch(s, cfg)
 
 	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"query":   "fallback",
-		"project": "test",
-		"limit":   10.0,
+		"query":     "fallback",
+		"workspace": "test",
+		"limit":     10.0,
 	}}}
 
 	res, err := search(context.Background(), req)

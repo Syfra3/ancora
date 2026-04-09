@@ -252,8 +252,8 @@ func (s *Server) handlePassiveCapture(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRecentObservations(w http.ResponseWriter, r *http.Request) {
-	project := r.URL.Query().Get("project")
-	scope := r.URL.Query().Get("scope")
+	project := r.URL.Query().Get("workspace")
+	scope := r.URL.Query().Get("visibility")
 	limit := queryInt(r, "limit", 20)
 
 	obs, err := s.store.RecentObservations(project, scope, limit)
@@ -484,8 +484,8 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 // ─── Context ─────────────────────────────────────────────────────────────────
 
 func (s *Server) handleContext(w http.ResponseWriter, r *http.Request) {
-	project := r.URL.Query().Get("project")
-	scope := r.URL.Query().Get("scope")
+	project := r.URL.Query().Get("workspace")
+	scope := r.URL.Query().Get("visibility")
 
 	context, err := s.store.FormatContext(project, scope)
 	if err != nil {
