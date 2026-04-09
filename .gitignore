@@ -36,5 +36,5 @@ bin/
 dist/
 
 # Ralph and workflow artifacts
-workflows/
+/workflows/
 .ralph/
