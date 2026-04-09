@@ -53,7 +53,7 @@ fi
 
 # Fetch memory context
 ENCODED_PROJECT=$(printf '%s' "$PROJECT" | jq -sRr @uri)
-CONTEXT=$(curl -sf "${ANCORA_URL}/context?project=${ENCODED_PROJECT}" --max-time 3 2>/dev/null | jq -r '.context // empty')
+CONTEXT=$(curl -sf "${ANCORA_URL}/context?workspace=${ENCODED_PROJECT}" --max-time 3 2>/dev/null | jq -r '.context // empty')
 
 # Inject Memory Protocol + context — stdout goes to Claude as additionalContext
 cat <<'PROTOCOL'

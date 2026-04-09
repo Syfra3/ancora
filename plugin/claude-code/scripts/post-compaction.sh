@@ -29,7 +29,7 @@ fi
 
 # Fetch context from previous sessions
 ENCODED_PROJECT=$(printf '%s' "$PROJECT" | jq -sRr @uri)
-CONTEXT=$(curl -sf "${ANCORA_URL}/context?project=${ENCODED_PROJECT}" --max-time 3 2>/dev/null | jq -r '.context // empty')
+CONTEXT=$(curl -sf "${ANCORA_URL}/context?workspace=${ENCODED_PROJECT}" --max-time 3 2>/dev/null | jq -r '.context // empty')
 
 # Inject Memory Protocol + compaction instruction + context
 cat <<'PROTOCOL'
@@ -66,7 +66,7 @@ Call `ancora_summarize` with: Goal, Discoveries, Accomplished, Next Steps, Relev
 ---
 
 CRITICAL INSTRUCTION POST-COMPACTION — follow these steps IN ORDER:
-PROTOC
+PROTOCOL
 
 printf "\n1. FIRST: Call ancora_summarize with the content of the compacted summary above. Use project: '%s'.\n" "$PROJECT"
 printf "   This preserves what was accomplished before compaction.\n\n"

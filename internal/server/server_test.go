@@ -585,19 +585,19 @@ func TestHandleRecentObservations(t *testing.T) {
 		},
 		{
 			name:           "filter by project alpha",
-			url:            "/observations/recent?project=alpha",
+			url:            "/observations/recent?workspace=alpha",
 			expectedStatus: http.StatusOK,
 			expectedCount:  2,
 		},
 		{
 			name:           "filter by scope project",
-			url:            "/observations/recent?scope=project",
+			url:            "/observations/recent?visibility=work",
 			expectedStatus: http.StatusOK,
 			expectedCount:  2,
 		},
 		{
 			name:           "filter by scope personal",
-			url:            "/observations/recent?scope=personal",
+			url:            "/observations/recent?visibility=personal",
 			expectedStatus: http.StatusOK,
 			expectedCount:  1,
 		},
@@ -1011,13 +1011,13 @@ func TestHandleContext(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
-			name:           "context with project filter",
-			url:            "/context?project=test",
+			name:           "context with workspace filter",
+			url:            "/context?workspace=test",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			name:           "context with scope filter",
-			url:            "/context?scope=project",
+			name:           "context with visibility filter",
+			url:            "/context?visibility=work",
 			expectedStatus: http.StatusOK,
 		},
 	}
