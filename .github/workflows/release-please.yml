@@ -107,3 +107,54 @@ jobs:
           files: |
             ancora-*.tar.gz
             ancora-*.sha256
+
+  update-homebrew-tap:
+    needs: [release-please, build-and-upload]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: Syfra3/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        env:
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          REPO="Syfra3/ancora"
+          PACKAGE="ancora"
+          FORMULA="Formula/${PACKAGE}.rb"
+
+          declare -A CHECKSUMS
+          for platform in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64; do
+            URL="https://github.com/${REPO}/releases/download/v${VERSION}/${PACKAGE}-${VERSION}-${platform}.tar.gz.sha256"
+            SHA256=$(curl -sL "$URL" | awk '{print $1}')
+            if [ -z "$SHA256" ]; then
+              echo "ERROR: Could not fetch checksum for ${platform}"
+              exit 1
+            fi
+            CHECKSUMS[$platform]="$SHA256"
+            echo "${platform}: ${SHA256}"
+          done
+
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" "$FORMULA"
+          sed -i "/darwin-arm64\.tar\.gz\"/{n; s/sha256 \".*\"/sha256 \"${CHECKSUMS[darwin-arm64]}\"/}" "$FORMULA"
+          sed -i "/darwin-amd64\.tar\.gz\"/{n; s/sha256 \".*\"/sha256 \"${CHECKSUMS[darwin-amd64]}\"/}" "$FORMULA"
+          sed -i "/linux-arm64\.tar\.gz\"/{n; s/sha256 \".*\"/sha256 \"${CHECKSUMS[linux-arm64]}\"/}" "$FORMULA"
+          sed -i "/linux-amd64\.tar\.gz\"/{n; s/sha256 \".*\"/sha256 \"${CHECKSUMS[linux-amd64]}\"/}" "$FORMULA"
+
+          echo "Formula updated to v${VERSION}"
+          cat "$FORMULA"
+
+      - name: Commit and push
+        env:
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/ancora.rb
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "chore: update ancora to v${VERSION}"
+          git push
