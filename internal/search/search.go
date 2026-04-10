@@ -244,5 +244,8 @@ func normalizeScope(scope string) string {
 	if v == "personal" {
 		return "personal"
 	}
-	return "project"
+	// The DB stores visibility as "work" (default) or "personal".
+	// "project" is accepted as an alias for "work" for API compatibility.
+	// Any unrecognised value (empty, "org", legacy) defaults to "work".
+	return "work"
 }

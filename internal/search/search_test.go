@@ -446,11 +446,12 @@ func TestNormalizeScopeEdgeCases(t *testing.T) {
 		{"personal", "personal"},
 		{"PERSONAL", "personal"},
 		{"  personal  ", "personal"},
-		{"project", "project"},
-		{"PROJECT", "project"},
-		{"anything else", "project"},
-		{"", "project"},
-		{"  ", "project"},
+		// "project" is an API alias for "work" (the DB storage value)
+		{"project", "work"},
+		{"PROJECT", "work"},
+		{"anything else", "work"},
+		{"", "work"},
+		{"  ", "work"},
 	}
 
 	for _, tt := range tests {
@@ -555,4 +556,115 @@ func TestSearchWithOptionsEmbedderError(t *testing.T) {
 	if len(results) == 0 {
 		t.Error("expected at least one keyword result")
 	}
+}
+
+// ─── Bug: search.normalizeScope("work") returns "project" but DB stores "work" ─
+//
+// When the LLM passes visibility="work" (as suggested by the tool description's
+// "(default)" hint), the hybrid search path calls filterResults with opts.Visibility="work".
+// search.normalizeScope("work") returns "project", but observations in the DB have
+// visibility="work", so the filter r.Visibility != "project" drops ALL work observations.
+
+// TestFilterResultsByWorkVisibilityHybridSearchReturnsWorkObs tests that
+// passing visibility="work" in hybrid search correctly returns work observations.
+//
+// The bug: search.normalizeScope("work") returns "project", but the DB stores
+// visibility="work". So filterResults drops all work observations from the
+// semantic candidate list when the user passes visibility="work".
+// The test exposes this using semantic-only results (non-keyword content).
+func TestFilterResultsByWorkVisibilityHybridSearchReturnsWorkObs(t *testing.T) {
+	s := newSearchTestStore(t)
+	if err := s.CreateSession("s-work-vis", "test", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Use content that does NOT match FTS5 keyword search, only semantic search.
+	// This forces the semantic path (filterResults) to be exercised exclusively.
+	workID, err := s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-work-vis",
+		Type:       "decision",
+		Title:      "Work observation",
+		Content:    "xyzzy42 unique token work", // FTS won't match "work" as query
+		Workspace:  "test",
+		Visibility: "work",
+	})
+	if err != nil {
+		t.Fatalf("add work obs: %v", err)
+	}
+	personalID, err := s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-work-vis",
+		Type:       "decision",
+		Title:      "Personal observation",
+		Content:    "xyzzy42 unique token personal",
+		Workspace:  "test",
+		Visibility: "personal",
+	})
+	if err != nil {
+		t.Fatalf("add personal obs: %v", err)
+	}
+
+	// Assign embeddings to both so semantic path runs
+	vec := []float32{0.5, 0.5}
+	for _, id := range []int64{workID, personalID} {
+		if err := s.SetEmbedding(id, vec); err != nil {
+			t.Fatalf("set embedding: %v", err)
+		}
+	}
+
+	// Search with a query that doesn't hit FTS, so only semantic path runs.
+	// With visibility="work", filterResults should keep only the work obs.
+	results, _, err := SearchWithOptions(
+		"nonexistent-keyword-xyzzy42-match",
+		store.SearchOptions{Visibility: "work", Limit: 10},
+		stubEmbedder{vec: vec},
+		s,
+	)
+	if err != nil {
+		t.Fatalf("SearchWithOptions: %v", err)
+	}
+
+	// Must find exactly 1 result — the work observation
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for visibility=work, got %d (titles: %v)",
+			len(results), titlesOf(results))
+	}
+	if results[0].Visibility != "work" {
+		t.Errorf("expected visibility=work in result, got %q", results[0].Visibility)
+	}
+	if results[0].Title != "Work observation" {
+		t.Errorf("expected 'Work observation' title, got %q", results[0].Title)
+	}
+}
+
+// TestNormalizeScopeWorkMapsToWork verifies that "work" normalizes to "work"
+// (matching DB storage), not "project". This was the root cause of the bug
+// where visibility="work" filter never matched DB records storing "work".
+func TestNormalizeScopeWorkMapsToWork(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"work", "work"},    // Bug: was returning "project"
+		{"WORK", "work"},    // Bug: was returning "project"
+		{"project", "work"}, // "project" is an alias for "work"
+		{"personal", "personal"},
+		{"", "work"}, // empty should default to "work" (the DB default)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := normalizeScope(tt.input)
+			if result != tt.expected {
+				t.Errorf("normalizeScope(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func titlesOf(results []Result) []string {
+	out := make([]string, len(results))
+	for i, r := range results {
+		out[i] = r.Title
+	}
+	return out
 }
