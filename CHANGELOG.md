@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2](https://github.com/Syfra3/ancora/compare/v1.2.1...v1.2.2) (2026-04-10)
+
+
+### Bug Fixes
+
+* **search:** normalizeScope inconsistency breaks visibility=work filter in hybrid search ([#14](https://github.com/Syfra3/ancora/issues/14)) ([d348dff](https://github.com/Syfra3/ancora/commit/d348dff273cd2e038c98b3538631d6abdee771ea))
+
 ## [1.2.1](https://github.com/Syfra3/ancora/compare/v1.2.0...v1.2.1) (2026-04-09)
 
 
