@@ -2001,3 +2001,304 @@ func (m *MockEmbedder) Embed(_ string) ([]float32, error) {
 	}
 	return m.Vector, nil
 }
+
+// ─── Issue: ancora_context visibility filtering bug ─────────────────────────
+//
+// Root cause 1: Tool description says "'work' (default)" which causes LLMs to
+// explicitly pass visibility=work. Since search.go normalizeScope maps "work" → "project"
+// but the DB stores "work", the filter visibility='project' matches NOTHING.
+//
+// Root cause 2: search.go has its own normalizeScope that returns "project" for
+// non-personal values, but store.go normalizeScope returns "work". When an LLM
+// passes visibility="work" to the search tool, filterResults in hybrid search
+// maps it to "project" and no work observations match.
+//
+// Fix: Change tool descriptions to say "omit to search all" instead of "(default)",
+// and fix search.go normalizeScope to return "work" to match the DB.
+
+func TestHandleContextReturnsPersonalObservationsWhenNoVisibilitySpecified(t *testing.T) {
+	s := newMCPTestStore(t)
+	if err := s.CreateSession("s-personal", "ancora", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Add a personal observation (like PC components)
+	_, err := s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-personal",
+		Type:       "discovery",
+		Title:      "PC Components - Full System Specs",
+		Content:    "CPU: Intel Core i9-14900K, GPU: RTX 5080, RAM: 64GB",
+		Workspace:  "ancora",
+		Visibility: "personal",
+	})
+	if err != nil {
+		t.Fatalf("add personal observation: %v", err)
+	}
+
+	// Add a work observation
+	_, err = s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-personal",
+		Type:       "decision",
+		Title:      "Auth architecture decision",
+		Content:    "Use JWT for stateless auth",
+		Workspace:  "ancora",
+		Visibility: "work",
+	})
+	if err != nil {
+		t.Fatalf("add work observation: %v", err)
+	}
+
+	// Call context WITHOUT specifying visibility — should return BOTH personal and work
+	h := handleContext(s, MCPConfig{DefaultProject: "ancora"})
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"workspace": "ancora",
+		// NO visibility specified — should return all
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("context handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected context error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+
+	// Should contain the personal observation
+	if !strings.Contains(text, "PC Components") {
+		t.Errorf("context without visibility filter should include personal observations, got: %s", text)
+	}
+
+	// Should also contain the work observation
+	if !strings.Contains(text, "Auth architecture") {
+		t.Errorf("context without visibility filter should include work observations, got: %s", text)
+	}
+}
+
+func TestHandleContextFiltersPersonalWhenWorkVisibilitySpecified(t *testing.T) {
+	s := newMCPTestStore(t)
+	if err := s.CreateSession("s-filter", "ancora", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Add a personal observation
+	_, err := s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-filter",
+		Type:       "discovery",
+		Title:      "Personal data",
+		Content:    "My personal stuff",
+		Workspace:  "ancora",
+		Visibility: "personal",
+	})
+	if err != nil {
+		t.Fatalf("add personal observation: %v", err)
+	}
+
+	// Add a work observation
+	_, err = s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-filter",
+		Type:       "decision",
+		Title:      "Work data",
+		Content:    "Work related content",
+		Workspace:  "ancora",
+		Visibility: "work",
+	})
+	if err != nil {
+		t.Fatalf("add work observation: %v", err)
+	}
+
+	// Call context WITH visibility=work — should only return work observations
+	h := handleContext(s, MCPConfig{DefaultProject: "ancora"})
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"workspace":  "ancora",
+		"visibility": "work",
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("context handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected context error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+
+	// Should NOT contain the personal observation
+	if strings.Contains(text, "Personal data") {
+		t.Errorf("context with visibility=work should NOT include personal observations, got: %s", text)
+	}
+
+	// Should contain the work observation
+	if !strings.Contains(text, "Work data") {
+		t.Errorf("context with visibility=work should include work observations, got: %s", text)
+	}
+}
+
+func TestHandleContextFiltersWorkWhenPersonalVisibilitySpecified(t *testing.T) {
+	s := newMCPTestStore(t)
+	if err := s.CreateSession("s-personal-only", "ancora", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Add a personal observation
+	_, err := s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-personal-only",
+		Type:       "discovery",
+		Title:      "Personal finances",
+		Content:    "My bank account details",
+		Workspace:  "ancora",
+		Visibility: "personal",
+	})
+	if err != nil {
+		t.Fatalf("add personal observation: %v", err)
+	}
+
+	// Add a work observation
+	_, err = s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-personal-only",
+		Type:       "decision",
+		Title:      "Code refactoring",
+		Content:    "Refactor auth module",
+		Workspace:  "ancora",
+		Visibility: "work",
+	})
+	if err != nil {
+		t.Fatalf("add work observation: %v", err)
+	}
+
+	// Call context WITH visibility=personal — should only return personal observations
+	h := handleContext(s, MCPConfig{DefaultProject: "ancora"})
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"workspace":  "ancora",
+		"visibility": "personal",
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("context handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected context error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+
+	// Should contain the personal observation
+	if !strings.Contains(text, "Personal finances") {
+		t.Errorf("context with visibility=personal should include personal observations, got: %s", text)
+	}
+
+	// Should NOT contain the work observation
+	if strings.Contains(text, "Code refactoring") {
+		t.Errorf("context with visibility=personal should NOT include work observations, got: %s", text)
+	}
+}
+
+// TestHandleSearchWithWorkVisibilityFindsWorkObservations verifies that
+// passing visibility="work" actually finds work observations.
+// This was broken because search.go normalizeScope("work") returned "project"
+// but DB stores visibility="work", so filter visibility='project' matched nothing.
+func TestHandleSearchWithWorkVisibilityFindsWorkObservations(t *testing.T) {
+	s := newMCPTestStore(t)
+	if err := s.CreateSession("s-vis-work", "ancora", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Add a work observation (stored with visibility="work" in DB)
+	_, err := s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-vis-work",
+		Type:       "decision",
+		Title:      "JWT auth decision",
+		Content:    "Use JWT for stateless authentication",
+		Workspace:  "ancora",
+		Visibility: "work",
+	})
+	if err != nil {
+		t.Fatalf("add work observation: %v", err)
+	}
+
+	h := handleSearch(s, MCPConfig{DefaultProject: "ancora"})
+
+	// Explicitly pass visibility=work as the LLM would do
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"query":      "JWT",
+		"workspace":  "ancora",
+		"visibility": "work", // LLM passes this based on the "(default)" hint in description
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("search error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("search tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	// Should find the work observation
+	if !strings.Contains(text, "JWT auth decision") {
+		t.Errorf("search with visibility=work should find work observations, got: %s", text)
+	}
+}
+
+func TestHandleSearchWithoutVisibilityReturnsAll(t *testing.T) {
+	s := newMCPTestStore(t)
+	if err := s.CreateSession("s-search-vis", "ancora", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Add personal observation
+	_, err := s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-search-vis",
+		Type:       "discovery",
+		Title:      "PC Components specs",
+		Content:    "Intel i9-14900K, RTX 5080",
+		Workspace:  "ancora",
+		Visibility: "personal",
+	})
+	if err != nil {
+		t.Fatalf("add personal: %v", err)
+	}
+
+	// Add work observation with same keyword
+	_, err = s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-search-vis",
+		Type:       "decision",
+		Title:      "Server components architecture",
+		Content:    "Microservices with components",
+		Workspace:  "ancora",
+		Visibility: "work",
+	})
+	if err != nil {
+		t.Fatalf("add work: %v", err)
+	}
+
+	h := handleSearch(s, MCPConfig{DefaultProject: "ancora"})
+
+	// Search without visibility filter — should return BOTH
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"query":     "components",
+		"workspace": "ancora",
+		// NO visibility specified
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("search error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("search tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+
+	// Should find both
+	if !strings.Contains(text, "PC Components") {
+		t.Errorf("search without visibility should find personal observations, got: %s", text)
+	}
+	if !strings.Contains(text, "Server components") {
+		t.Errorf("search without visibility should find work observations, got: %s", text)
+	}
+}
