@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/Syfra3/ancora/internal/classify"
 	"github.com/Syfra3/ancora/internal/embed"
 	"github.com/Syfra3/ancora/internal/setup"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -264,6 +265,8 @@ func (m Model) handleKeyPress(key string) (tea.Model, tea.Cmd) {
 		return m.handlePurgeKeys(key)
 	case ScreenUninstall:
 		return m.handleUninstallKeys(key)
+	case ScreenSettings:
+		return m.handleSettingsKeys(key)
 	}
 	return m, nil
 }
@@ -293,6 +296,7 @@ func getDashboardMenuItems(isInstalled bool) []MenuItem {
 		{"Recent observations", "Browse latest saved memories", "recent"},
 		{"Browse sessions", "View all coding sessions", "sessions"},
 		{"Browse projects", "View projects with sync status and scope", "projects"},
+		{"Search ranking", "Configure workspace-aware result ranking preset", "settings"},
 		{"Update Ancora", "Update to new version and reinstall without losing data", "setup"},
 		{"Uninstall Ancora", "Remove Ancora completely from your system", "uninstall"},
 		{"Purge database", "DELETE ALL data - observations, sessions, prompts", "purge"},
@@ -384,6 +388,13 @@ func (m Model) handleDashboardSelection() (tea.Model, tea.Cmd) {
 		m.Scroll = 0
 		m.ProjectScopeFilter = ""
 		return m, loadProjectsWithStats(m.store)
+
+	case "settings":
+		m.PrevScreen = ScreenDashboard
+		m.Screen = ScreenSettings
+		m.Cursor = int(m.ClassifyConfig.Preset) // pre-select current preset
+		m.SettingsPresetSaved = false
+		return m, nil
 
 	case "setup":
 		m.PrevScreen = ScreenDashboard
@@ -1109,6 +1120,40 @@ func (m Model) handleUninstallKeys(key string) (tea.Model, tea.Cmd) {
 	case "esc", "q":
 		m.Screen = ScreenDashboard
 		m.Cursor = 0
+		return m, nil
+	}
+	return m, nil
+}
+
+// ─── Settings (Search Ranking Preset) ────────────────────────────────────────
+
+// settingsPresets is the ordered list of presets shown in the settings screen.
+var settingsPresets = []classify.TierPreset{
+	classify.PresetBalanced,
+	classify.PresetStrict,
+	classify.PresetFlat,
+}
+
+func (m Model) handleSettingsKeys(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "up", "k":
+		if m.Cursor > 0 {
+			m.Cursor--
+		}
+	case "down", "j":
+		if m.Cursor < len(settingsPresets)-1 {
+			m.Cursor++
+		}
+	case "enter", " ":
+		preset := settingsPresets[m.Cursor]
+		m.ClassifyConfig.Preset = preset
+		m.SettingsPresetSaved = true
+		_ = classify.SaveClassifyConfig(m.ClassifyConfigPath, m.ClassifyConfig)
+		return m, nil
+	case "esc", "q":
+		m.Screen = ScreenDashboard
+		m.Cursor = 0
+		m.SettingsPresetSaved = false
 		return m, nil
 	}
 	return m, nil

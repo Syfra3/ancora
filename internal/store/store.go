@@ -107,11 +107,12 @@ type TimelineResult struct {
 }
 
 type SearchOptions struct {
-	Type         string `json:"type,omitempty"`
-	Workspace    string `json:"workspace,omitempty"`
-	Visibility   string `json:"visibility,omitempty"`
-	Organization string `json:"organization,omitempty"`
-	Limit        int    `json:"limit,omitempty"`
+	Type             string `json:"type,omitempty"`
+	Workspace        string `json:"workspace,omitempty"`
+	Visibility       string `json:"visibility,omitempty"`
+	Organization     string `json:"organization,omitempty"`
+	Limit            int    `json:"limit,omitempty"`
+	CurrentWorkspace string `json:"current_workspace,omitempty"` // used for tier scoring — does not filter, only ranks
 }
 
 type AddObservationParams struct {
@@ -1175,8 +1176,17 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 }
 
 func (s *Store) RecentObservations(workspace, visibility string, limit int) ([]Observation, error) {
+	return s.RecentObservationsWithPriority(workspace, visibility, "", limit)
+}
+
+// RecentObservationsWithPriority is like RecentObservations but also accepts a
+// priorityWorkspace. When set and no workspace filter is active, results from
+// priorityWorkspace are returned first, followed by recency order.
+// This powers workspace-aware context loading: current project floats to the top.
+func (s *Store) RecentObservationsWithPriority(workspace, visibility, priorityWorkspace string, limit int) ([]Observation, error) {
 	// Normalize workspace filter for case-insensitive matching
 	workspace, _ = NormalizeProject(workspace)
+	priorityWorkspace, _ = NormalizeProject(priorityWorkspace)
 
 	if limit <= 0 {
 		limit = s.cfg.MaxContextResults
@@ -1202,8 +1212,15 @@ func (s *Store) RecentObservations(workspace, visibility string, limit int) ([]O
 		args = append(args, normalizedVisibility)
 	}
 
-	query += " ORDER BY o.created_at DESC LIMIT ?"
-	args = append(args, limit)
+	// When no workspace filter is active and a priority workspace is set,
+	// float priority-workspace results to the top before sorting by recency.
+	if workspace == "" && priorityWorkspace != "" {
+		query += " ORDER BY (CASE WHEN o.workspace = ? THEN 0 ELSE 1 END), o.created_at DESC LIMIT ?"
+		args = append(args, priorityWorkspace, limit)
+	} else {
+		query += " ORDER BY o.created_at DESC LIMIT ?"
+		args = append(args, limit)
+	}
 
 	return s.queryObservations(query, args...)
 }
@@ -1915,12 +1932,19 @@ func (s *Store) Stats() (*Stats, error) {
 // ─── Context Formatting ─────────────────────────────────────────────────────
 
 func (s *Store) FormatContext(workspace, visibility string) (string, error) {
+	return s.FormatContextWithPriority(workspace, visibility, "")
+}
+
+// FormatContextWithPriority is like FormatContext but floats observations from
+// priorityWorkspace to the top when no workspace filter is active.
+// Used by ancora_context to surface current-project observations first.
+func (s *Store) FormatContextWithPriority(workspace, visibility, priorityWorkspace string) (string, error) {
 	sessions, err := s.RecentSessions(workspace, 5)
 	if err != nil {
 		return "", err
 	}
 
-	observations, err := s.RecentObservations(workspace, visibility, s.cfg.MaxContextResults)
+	observations, err := s.RecentObservationsWithPriority(workspace, visibility, priorityWorkspace, s.cfg.MaxContextResults)
 	if err != nil {
 		return "", err
 	}

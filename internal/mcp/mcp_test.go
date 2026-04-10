@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Syfra3/ancora/internal/classify"
 	"github.com/Syfra3/ancora/internal/store"
 	mcppkg "github.com/mark3labs/mcp-go/mcp"
 )
@@ -2000,4 +2001,207 @@ func (m *MockEmbedder) Embed(_ string) ([]float32, error) {
 		return nil, m.Err
 	}
 	return m.Vector, nil
+}
+
+// ─── T6.2: handleSave auto-classify integration ───────────────────────────────
+
+func TestHandleSaveAutoClassifiesWorkspaceFromDefaultProject(t *testing.T) {
+	s := newMCPTestStore(t)
+	cfg := MCPConfig{DefaultProject: "glim-api"}
+	cfg.Classifier = classify.NewClassifier(s, "glim-api", classify.DefaultClassifyConfig())
+
+	h := handleSave(s, cfg)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"title":   "Add rate limiting to API",
+		"content": "Implement token bucket for the REST endpoints",
+		// No workspace, visibility, or organization provided
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("save: err=%v isError=%v text=%s", err, res.IsError, callResultText(t, res))
+	}
+
+	obs, err := s.RecentObservations("glim-api", "work", 1)
+	if err != nil || len(obs) == 0 {
+		t.Fatalf("expected observation saved under glim-api/work: err=%v len=%d", err, len(obs))
+	}
+	if obs[0].Visibility != "work" {
+		t.Errorf("expected visibility=work, got %q", obs[0].Visibility)
+	}
+	if obs[0].Workspace == nil || *obs[0].Workspace != "glim-api" {
+		t.Errorf("expected workspace=glim-api, got %v", obs[0].Workspace)
+	}
+}
+
+func TestHandleSaveAutoClassifiesPersonalFromKeywords(t *testing.T) {
+	s := newMCPTestStore(t)
+	cfg := MCPConfig{DefaultProject: "glim-api"}
+	cfg.Classifier = classify.NewClassifier(s, "glim-api", classify.DefaultClassifyConfig())
+
+	h := handleSave(s, cfg)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"title":   "My budget for Q2",
+		"content": "Salary and expenses breakdown",
+		// Personal keywords — should override work classification
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("save: err=%v isError=%v text=%s", err, res.IsError, callResultText(t, res))
+	}
+
+	obs, err := s.RecentObservations("finance", "personal", 1)
+	if err != nil || len(obs) == 0 {
+		t.Fatalf("expected observation under finance/personal: err=%v len=%d", err, len(obs))
+	}
+	if obs[0].Visibility != "personal" {
+		t.Errorf("expected visibility=personal, got %q", obs[0].Visibility)
+	}
+}
+
+func TestHandleSaveExplicitFieldsNotOverriddenByClassifier(t *testing.T) {
+	s := newMCPTestStore(t)
+	cfg := MCPConfig{DefaultProject: "glim-api"}
+	cfg.Classifier = classify.NewClassifier(s, "glim-api", classify.DefaultClassifyConfig())
+
+	h := handleSave(s, cfg)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"title":      "My budget",
+		"content":    "money expense salary",
+		"workspace":  "my-custom-workspace", // explicit — must not be overridden
+		"visibility": "work",                // explicit — must not be overridden
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("save: err=%v isError=%v text=%s", err, res.IsError, callResultText(t, res))
+	}
+
+	obs, err := s.RecentObservations("my-custom-workspace", "work", 1)
+	if err != nil || len(obs) == 0 {
+		t.Fatalf("expected observation under my-custom-workspace: err=%v len=%d", err, len(obs))
+	}
+}
+
+func TestHandleSaveWithoutClassifierUsesDefaultProject(t *testing.T) {
+	s := newMCPTestStore(t)
+	// No classifier — legacy behavior
+	cfg := MCPConfig{DefaultProject: "legacy-project"}
+
+	h := handleSave(s, cfg)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"title":   "Legacy save",
+		"content": "No classifier wired in",
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("save: err=%v isError=%v", err, res.IsError)
+	}
+
+	obs, err := s.RecentObservations("legacy-project", "", 1)
+	if err != nil || len(obs) == 0 {
+		t.Fatalf("expected observation in legacy-project: err=%v len=%d", err, len(obs))
+	}
+}
+
+// ─── T6.1: Search tier scoring integration ───────────────────────────────────
+
+func TestHandleSearchTierScoringRanksCurrentWorkspaceFirst(t *testing.T) {
+	s := newMCPTestStore(t)
+	if err := s.CreateSession("s-tier", "glim-api", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Add two observations: other-ws gets a richer keyword match (higher raw score)
+	// but tier scoring with strict preset should demote it below the current-workspace result.
+	for _, p := range []store.AddObservationParams{
+		{
+			SessionID: "s-tier", Type: "decision",
+			Title:     "Current ws result",
+			Content:   "token bucket", // shorter — lower raw FTS rank
+			Workspace: "glim-api", Visibility: "work",
+		},
+		{
+			SessionID: "s-tier", Type: "decision",
+			Title:     "Other ws result",
+			Content:   "token bucket rate limiting algorithm implementation throughput", // richer — higher raw rank
+			Workspace: "other-service", Visibility: "work",
+		},
+	} {
+		if _, err := s.AddObservation(p); err != nil {
+			t.Fatalf("add observation %q: %v", p.Title, err)
+		}
+	}
+
+	cfg := MCPConfig{
+		DefaultProject: "glim-api",
+		TierConfig:     classify.PresetStrict.ToTierConfig(), // Tier3=0.3 — heavy penalty
+	}
+	h := handleSearch(s, cfg)
+
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"query": "token bucket",
+		"limit": 10.0,
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("search: err=%v isError=%v text=%s", err, res.IsError, callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	// "glim-api" result should appear before "other-service"
+	glimIdx := strings.Index(text, "Current ws result")
+	otherIdx := strings.Index(text, "Other ws result")
+	if glimIdx < 0 || otherIdx < 0 {
+		t.Fatalf("expected both results in output, got: %s", text)
+	}
+	if glimIdx > otherIdx {
+		t.Errorf("expected current-workspace result (glim-api) ranked before other-ws result after strict tier scoring")
+	}
+}
+
+// ─── T6.3: handleContext priority workspace ───────────────────────────────────
+
+func TestHandleContextPrioritizesCurrentWorkspace(t *testing.T) {
+	s := newMCPTestStore(t)
+	if err := s.CreateSession("s-ctx-prio", "glim-api", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Add two observations from different workspaces
+	if _, err := s.AddObservation(store.AddObservationParams{
+		SessionID: "s-ctx-prio", Type: "decision", Title: "OtherWS observation",
+		Content: "from other service", Workspace: "other-service", Visibility: "work",
+	}); err != nil {
+		t.Fatalf("add other: %v", err)
+	}
+	if _, err := s.AddObservation(store.AddObservationParams{
+		SessionID: "s-ctx-prio", Type: "decision", Title: "CurrentWS observation",
+		Content: "from current project", Workspace: "glim-api", Visibility: "work",
+	}); err != nil {
+		t.Fatalf("add current: %v", err)
+	}
+
+	h := handleContext(s, MCPConfig{DefaultProject: "glim-api"})
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		// No workspace filter — should return all but rank glim-api first
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("context: err=%v isError=%v", err, res.IsError)
+	}
+
+	text := callResultText(t, res)
+	currentIdx := strings.Index(text, "CurrentWS observation")
+	otherIdx := strings.Index(text, "OtherWS observation")
+	if currentIdx < 0 || otherIdx < 0 {
+		t.Fatalf("expected both observations in context output, got: %s", text)
+	}
+	if currentIdx > otherIdx {
+		t.Errorf("expected current-workspace observation to appear before other-ws in context")
+	}
 }

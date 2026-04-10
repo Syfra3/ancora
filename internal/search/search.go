@@ -19,6 +19,7 @@ package search
 import (
 	"strings"
 
+	"github.com/Syfra3/ancora/internal/classify"
 	"github.com/Syfra3/ancora/internal/store"
 )
 
@@ -50,7 +51,18 @@ type Embedder interface {
 // SearchWithOptions runs keyword search first, then fuses semantic search when
 // an embedder is available. Project filtering is optional; when omitted the
 // search spans all local memory.
+//
+// When opts.CurrentWorkspace is set, tier scoring is applied after fusion:
+// results from the same workspace rank first, same-org second, everything else third.
+// Use opts.TierConfig (via classify.TierPreset.ToTierConfig()) to control penalties.
 func SearchWithOptions(query string, opts store.SearchOptions, embedder Embedder, s *store.Store) ([]Result, Mode, error) {
+	return SearchWithOptionsAndTier(query, opts, embedder, s, classify.TierConfig{})
+}
+
+// SearchWithOptionsAndTier is like SearchWithOptions but accepts an explicit
+// TierConfig for workspace-aware ranking. Zero TierConfig = balanced defaults
+// when CurrentWorkspace is set; flat (no penalty) when CurrentWorkspace is empty.
+func SearchWithOptionsAndTier(query string, opts store.SearchOptions, embedder Embedder, s *store.Store, tierCfg classify.TierConfig) ([]Result, Mode, error) {
 	limit := opts.Limit
 	if limit <= 0 {
 		limit = 10
@@ -80,6 +92,8 @@ func SearchWithOptions(query string, opts store.SearchOptions, embedder Embedder
 		}
 	}
 
+	var results []Result
+	var mode Mode
 	switch {
 	case len(semResults) == 0 && len(kwResults) == 0:
 		return nil, ModeKeyword, nil
@@ -88,16 +102,23 @@ func SearchWithOptions(query string, opts store.SearchOptions, embedder Embedder
 		for i := 0; i < limit && i < len(kwResults); i++ {
 			out = append(out, Result{kwResults[i], ModeKeyword})
 		}
-		return out, ModeKeyword, nil
+		results, mode = out, ModeKeyword
 	case len(kwResults) == 0:
 		out := make([]Result, 0, min(limit, len(semResults)))
 		for i := 0; i < limit && i < len(semResults); i++ {
 			out = append(out, Result{semResults[i], ModeSemantic})
 		}
-		return out, ModeSemantic, nil
+		results, mode = out, ModeSemantic
 	default:
-		return rrf(kwResults, semResults, limit), ModeHybrid, nil
+		results, mode = rrf(kwResults, semResults, limit), ModeHybrid
 	}
+
+	// Apply workspace-aware tier scoring when a current workspace is known.
+	if opts.CurrentWorkspace != "" {
+		results = ApplyTierScoring(results, opts.CurrentWorkspace, tierCfg)
+	}
+
+	return results, mode, nil
 }
 
 // HybridSearch merges FTS5 keyword results with vector semantic results

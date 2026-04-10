@@ -142,6 +142,8 @@ func (m Model) View() string {
 		content = m.viewPurge()
 	case ScreenUninstall:
 		content = m.viewUninstall()
+	case ScreenSettings:
+		content = m.viewSettings()
 	default:
 		content = "Unknown screen"
 	}
@@ -1183,6 +1185,50 @@ func (m Model) viewPurge() string {
 		b.WriteString(renderFooter("j/k navigate • enter confirm • esc cancel"))
 	}
 
+	return b.String()
+}
+
+// ─── Settings ────────────────────────────────────────────────────────────────
+
+func (m Model) viewSettings() string {
+	var b strings.Builder
+
+	b.WriteString(m.renderHeader("⚙  SEARCH RANKING PRESET"))
+	b.WriteString("Controls how search results are ranked based on workspace proximity.\n\n")
+
+	labelStyle := lipgloss.NewStyle().Foreground(colorText).Bold(false).Width(12)
+	descStyle := lipgloss.NewStyle().Foreground(colorSubtext).Width(60)
+
+	presetDesc := map[string]string{
+		"Balanced": "Current workspace first, others slightly demoted  (default)",
+		"Strict":   "Heavy penalty for cross-workspace and cross-org results",
+		"Flat":     "Pure relevance ranking — no workspace penalty",
+	}
+
+	for i, preset := range settingsPresets {
+		cursor := "  "
+		ls := labelStyle
+		if i == m.Cursor {
+			cursor = lipgloss.NewStyle().Foreground(colorMint).Render("▸ ")
+			ls = labelStyle.Copy().Foreground(colorLavender)
+		}
+
+		selected := "  "
+		if preset == m.ClassifyConfig.Preset {
+			selected = lipgloss.NewStyle().Foreground(colorMint).Render("✓ ")
+		}
+
+		label := ls.Render(preset.String())
+		desc := descStyle.Render(presetDesc[preset.String()])
+		b.WriteString(fmt.Sprintf("%s%s%s %s\n", cursor, selected, label, desc))
+	}
+
+	b.WriteString("\n")
+	if m.SettingsPresetSaved {
+		b.WriteString(successStyle.Render("✅ Preset saved.\n"))
+	}
+
+	b.WriteString(renderFooter("j/k navigate • enter select • esc back"))
 	return b.String()
 }
 

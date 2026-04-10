@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Syfra3/ancora/internal/classify"
 	projectpkg "github.com/Syfra3/ancora/internal/project"
 	"github.com/Syfra3/ancora/internal/search"
 	"github.com/Syfra3/ancora/internal/store"
@@ -33,8 +34,10 @@ type Embedder interface {
 
 // MCPConfig holds configuration for the MCP server.
 type MCPConfig struct {
-	DefaultProject string   // Auto-detected project name, used when LLM sends empty project
-	Embedder       Embedder // Optional: enables hybrid search. nil = keyword-only.
+	DefaultProject string               // Auto-detected project name, used when LLM sends empty project
+	Embedder       Embedder             // Optional: enables hybrid search. nil = keyword-only.
+	Classifier     *classify.Classifier // Optional: enables auto-classification on save. nil = no auto-fill.
+	TierConfig     classify.TierConfig  // Controls workspace-aware search ranking. Zero value = flat (no penalty).
 }
 
 var suggestTopicKey = store.SuggestTopicKey
@@ -647,12 +650,13 @@ func handleSearch(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		visibility, _ := req.GetArguments()["visibility"].(string)
 		limit := intArg(req, "limit", 10)
 
-		searchResults, searchMode, err := search.SearchWithOptions(query, store.SearchOptions{
-			Type:       typ,
-			Workspace:  workspace,
-			Visibility: visibility,
-			Limit:      limit,
-		}, cfg.Embedder, s)
+		searchResults, searchMode, err := search.SearchWithOptionsAndTier(query, store.SearchOptions{
+			Type:             typ,
+			Workspace:        workspace,
+			Visibility:       visibility,
+			Limit:            limit,
+			CurrentWorkspace: cfg.DefaultProject,
+		}, cfg.Embedder, s, cfg.TierConfig)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Search error: %s. Try simpler keywords.", err)), nil
 		}
@@ -703,19 +707,47 @@ func handleSave(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		organization, _ := req.GetArguments()["organization"].(string)
 		topicKey, _ := req.GetArguments()["topic_key"].(string)
 
-		// Apply default workspace when LLM sends empty
+		// Build observation params and auto-classify missing fields before
+		// applying the old default-workspace fallback logic.
+		obsParams := store.AddObservationParams{
+			SessionID:    sessionID,
+			Type:         typ,
+			Title:        title,
+			Content:      content,
+			Workspace:    workspace,
+			Visibility:   visibility,
+			Organization: organization,
+			TopicKey:     topicKey,
+		}
+
+		// Auto-classify: fill in workspace/visibility/organization when empty.
+		// Explicit LLM-provided fields are never overridden.
+		if cfg.Classifier != nil {
+			cfg.Classifier.Fill(&obsParams)
+		}
+
+		// Extract (possibly auto-filled) fields back for downstream logic.
+		workspace = obsParams.Workspace
+		visibility = obsParams.Visibility
+		organization = obsParams.Organization
+
+		// Apply default workspace when LLM sends empty AND classifier didn't fill it.
 		if workspace == "" {
 			workspace = cfg.DefaultProject
+			obsParams.Workspace = workspace
 		}
 		// Normalize workspace name and capture warning
 		normalized, normWarning := store.NormalizeProject(workspace)
 		workspace = normalized
+		obsParams.Workspace = workspace
 
 		if typ == "" {
 			typ = "manual"
+			obsParams.Type = typ
 		}
 		if sessionID == "" {
 			sessionID = defaultSessionID(workspace)
+			obsParams.SessionID = sessionID
 		}
 		suggestedTopicKey := suggestTopicKey(typ, title, content)
 
@@ -746,16 +778,7 @@ func handleSave(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 
 		truncated := len(content) > s.MaxObservationLength()
 
-		_, err := s.AddObservation(store.AddObservationParams{
-			SessionID:    sessionID,
-			Type:         typ,
-			Title:        title,
-			Content:      content,
-			Workspace:    workspace,
-			Visibility:   visibility,
-			Organization: organization,
-			TopicKey:     topicKey,
-		})
+		_, err := s.AddObservation(obsParams)
 		if err != nil {
 			return mcp.NewToolResultError("Failed to save: " + err.Error()), nil
 		}
@@ -902,16 +925,16 @@ func handleSavePrompt(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 
 func handleContext(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		workspace, _ := req.GetArguments()["workspace"].(string)
+		// filterWorkspace: explicit LLM filter (empty = no filter = return all)
+		filterWorkspace, _ := req.GetArguments()["workspace"].(string)
 		visibility, _ := req.GetArguments()["visibility"].(string)
 
-		// Apply default workspace when LLM sends empty
-		if workspace == "" {
-			workspace = cfg.DefaultProject
-		}
-		workspace, _ = store.NormalizeProject(workspace)
+		filterWorkspace, _ = store.NormalizeProject(filterWorkspace)
 
-		context, err := s.FormatContext(workspace, visibility)
+		// Use FormatContextWithPriority:
+		// - filterWorkspace: hard filter (only if LLM explicitly provided it)
+		// - cfg.DefaultProject: priority boost (current project floats to top even without hard filter)
+		context, err := s.FormatContextWithPriority(filterWorkspace, visibility, cfg.DefaultProject)
 		if err != nil {
 			return mcp.NewToolResultError("Failed to get context: " + err.Error()), nil
 		}

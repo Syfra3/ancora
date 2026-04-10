@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Syfra3/ancora/internal/classify"
 	"github.com/Syfra3/ancora/internal/embed"
 	"github.com/Syfra3/ancora/internal/setup"
 	"github.com/Syfra3/ancora/internal/store"
@@ -45,6 +46,7 @@ const (
 	ScreenMoveObservation
 	ScreenPurge
 	ScreenUninstall
+	ScreenSettings
 )
 
 // ─── Custom Messages ─────────────────────────────────────────────────────────
@@ -219,10 +221,23 @@ type Model struct {
 	UninstallConfirmCursor int  // 0 = "No, go back", 1 = "Yes, uninstall"
 	UninstallDone          bool // true = uninstall completed
 	UninstallError         string
+
+	// Settings — Search ranking preset
+	ClassifyConfig      classify.ClassifyConfig // current config (loaded from disk)
+	ClassifyConfigPath  string                  // path to classify.json
+	SettingsPresetSaved bool                    // true after a preset is saved
 }
 
 // New creates a new TUI model connected to the given store.
 func New(s *store.Store, version string) Model {
+	cfgPath := classify.DefaultConfigPath()
+	cfg := classify.LoadClassifyConfig(cfgPath)
+	return NewWithConfig(s, version, cfg, cfgPath)
+}
+
+// NewWithConfig creates a TUI model with an explicit classify config and path.
+// Used in tests to inject a config without touching the filesystem.
+func NewWithConfig(s *store.Store, version string, cfg classify.ClassifyConfig, cfgPath string) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Search memories..."
 	ti.CharLimit = 256
@@ -233,13 +248,15 @@ func New(s *store.Store, version string) Model {
 	sp.Style = lipgloss.NewStyle().Foreground(colorLavender)
 
 	return Model{
-		store:            s,
-		Version:          version,
-		Screen:           ScreenDashboard,
-		SearchInput:      ti,
-		MoveActiveColumn: "project",
-		MoveScopeCursor:  0,
-		SetupSpinner:     sp,
+		store:              s,
+		Version:            version,
+		Screen:             ScreenDashboard,
+		SearchInput:        ti,
+		MoveActiveColumn:   "project",
+		MoveScopeCursor:    0,
+		SetupSpinner:       sp,
+		ClassifyConfig:     cfg,
+		ClassifyConfigPath: cfgPath,
 	}
 }
 
