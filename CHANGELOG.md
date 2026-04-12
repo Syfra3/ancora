@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.3](https://github.com/Syfra3/ancora/compare/v1.2.2...v1.2.3) (2026-04-12)
+
+
+### Bug Fixes
+
+* **embedding:** generate embeddings async on every save ([#17](https://github.com/Syfra3/ancora/issues/17)) ([26720f7](https://github.com/Syfra3/ancora/commit/26720f781074598c45118ef440e1dbf34613ea77))
+
 ## [1.2.2](https://github.com/Syfra3/ancora/compare/v1.2.1...v1.2.2) (2026-04-10)
 
 
