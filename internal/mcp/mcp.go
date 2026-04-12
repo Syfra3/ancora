@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Syfra3/ancora/internal/embedding"
 	projectpkg "github.com/Syfra3/ancora/internal/project"
 	"github.com/Syfra3/ancora/internal/search"
 	"github.com/Syfra3/ancora/internal/store"
@@ -33,8 +34,9 @@ type Embedder interface {
 
 // MCPConfig holds configuration for the MCP server.
 type MCPConfig struct {
-	DefaultProject string   // Auto-detected project name, used when LLM sends empty project
-	Embedder       Embedder // Optional: enables hybrid search. nil = keyword-only.
+	DefaultProject   string             // Auto-detected project name, used when LLM sends empty project
+	Embedder         Embedder           // Optional: enables hybrid search. nil = keyword-only.
+	EmbeddingService *embedding.Service // Optional: triggers async embedding after save.
 }
 
 var suggestTopicKey = store.SuggestTopicKey
@@ -746,7 +748,7 @@ func handleSave(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 
 		truncated := len(content) > s.MaxObservationLength()
 
-		_, err := s.AddObservation(store.AddObservationParams{
+		obsID, err := s.AddObservation(store.AddObservationParams{
 			SessionID:    sessionID,
 			Type:         typ,
 			Title:        title,
@@ -758,6 +760,12 @@ func handleSave(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		})
 		if err != nil {
 			return mcp.NewToolResultError("Failed to save: " + err.Error()), nil
+		}
+
+		// Fire-and-forget: generate embedding asynchronously.
+		// Non-blocking — returns immediately even if embedder is unavailable.
+		if cfg.EmbeddingService != nil {
+			cfg.EmbeddingService.EnqueueWithText(obsID, title+". "+content)
 		}
 
 		msg := fmt.Sprintf("Ancora\n**Saving**: %s\n\nMemory saved (%s)", title, typ)
@@ -1067,15 +1075,21 @@ func handleSessionSummary(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc 
 		// Ensure the session exists
 		s.CreateSession(sessionID, project, "")
 
-		_, err := s.AddObservation(store.AddObservationParams{
+		title := fmt.Sprintf("Session summary: %s", project)
+		obsID, err := s.AddObservation(store.AddObservationParams{
 			SessionID: sessionID,
 			Type:      "session_summary",
-			Title:     fmt.Sprintf("Session summary: %s", project),
+			Title:     title,
 			Content:   content,
 			Workspace: project,
 		})
 		if err != nil {
 			return mcp.NewToolResultError("Failed to save session summary: " + err.Error()), nil
+		}
+
+		// Fire-and-forget: generate embedding asynchronously.
+		if cfg.EmbeddingService != nil {
+			cfg.EmbeddingService.EnqueueWithText(obsID, title+". "+content)
 		}
 
 		return mcp.NewToolResultText(fmt.Sprintf("Session summary saved for project %q", project)), nil
@@ -1149,6 +1163,13 @@ func handleCapturePassive(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc 
 		})
 		if err != nil {
 			return mcp.NewToolResultError("Passive capture failed: " + err.Error()), nil
+		}
+
+		// Fire-and-forget: enqueue embeddings for all newly saved observations.
+		if cfg.EmbeddingService != nil {
+			for _, id := range result.SavedIDs {
+				cfg.EmbeddingService.EnqueueWithText(id, content)
+			}
 		}
 
 		return mcp.NewToolResultText(fmt.Sprintf(

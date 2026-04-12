@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Syfra3/ancora/internal/embed"
+	"github.com/Syfra3/ancora/internal/embedding"
 	"github.com/Syfra3/ancora/internal/search"
 	"github.com/Syfra3/ancora/internal/store"
 )
@@ -39,14 +40,15 @@ type SyncStatus struct {
 }
 
 type Server struct {
-	store      *store.Store
-	embedder   search.Embedder
-	mux        *http.ServeMux
-	port       int
-	listen     func(network, address string) (net.Listener, error)
-	serve      func(net.Listener, http.Handler) error
-	onWrite    func() // called after successful local writes (for autosync notification)
-	syncStatus SyncStatusProvider
+	store            *store.Store
+	embedder         search.Embedder
+	embeddingService *embedding.Service
+	mux              *http.ServeMux
+	port             int
+	listen           func(network, address string) (net.Listener, error)
+	serve            func(net.Listener, http.Handler) error
+	onWrite          func() // called after successful local writes (for autosync notification)
+	syncStatus       SyncStatusProvider
 }
 
 func New(s *store.Store, port int) *Server {
@@ -64,6 +66,12 @@ func New(s *store.Store, port int) *Server {
 // This is used to notify autosync.Manager via NotifyDirty().
 func (s *Server) SetOnWrite(fn func()) {
 	s.onWrite = fn
+}
+
+// SetEmbeddingService injects the async embedding service.
+// When set, new observations are enqueued for embedding after each save.
+func (s *Server) SetEmbeddingService(svc *embedding.Service) {
+	s.embeddingService = svc
 }
 
 // SetSyncStatus configures the sync status provider for the /sync/status endpoint.
@@ -226,6 +234,11 @@ func (s *Server) handleAddObservation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fire-and-forget: generate embedding asynchronously.
+	if s.embeddingService != nil {
+		s.embeddingService.EnqueueWithText(id, body.Title+". "+body.Content)
+	}
+
 	s.notifyWrite()
 	jsonResponse(w, http.StatusCreated, map[string]any{"id": id, "status": "saved"})
 }
@@ -245,6 +258,13 @@ func (s *Server) handlePassiveCapture(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	// Fire-and-forget: enqueue embeddings for all newly saved observations.
+	if s.embeddingService != nil {
+		for _, id := range result.SavedIDs {
+			s.embeddingService.EnqueueWithText(id, body.Content)
+		}
 	}
 
 	s.notifyWrite()
