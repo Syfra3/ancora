@@ -3868,9 +3868,10 @@ type PassiveCaptureParams struct {
 
 // PassiveCaptureResult holds the output of passive memory capture.
 type PassiveCaptureResult struct {
-	Extracted  int `json:"extracted"`  // Total learnings found in text
-	Saved      int `json:"saved"`      // New observations created
-	Duplicates int `json:"duplicates"` // Skipped because already existed
+	Extracted  int     `json:"extracted"`  // Total learnings found in text
+	Saved      int     `json:"saved"`      // New observations created
+	Duplicates int     `json:"duplicates"` // Skipped because already existed
+	SavedIDs   []int64 `json:"saved_ids"`  // IDs of newly created observations (for embedding)
 }
 
 // learningHeaderPattern matches section headers for learnings in both English and Spanish.
@@ -3983,7 +3984,7 @@ func (s *Store) PassiveCapture(p PassiveCaptureParams) (*PassiveCaptureResult, e
 			title = title[:60] + "..."
 		}
 
-		_, err = s.AddObservation(AddObservationParams{
+		savedID, err := s.AddObservation(AddObservationParams{
 			SessionID:  p.SessionID,
 			Type:       "passive",
 			Title:      title,
@@ -3996,6 +3997,7 @@ func (s *Store) PassiveCapture(p PassiveCaptureParams) (*PassiveCaptureResult, e
 			return result, fmt.Errorf("passive capture save: %w", err)
 		}
 		result.Saved++
+		result.SavedIDs = append(result.SavedIDs, savedID)
 	}
 
 	return result, nil

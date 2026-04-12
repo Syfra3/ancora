@@ -26,6 +26,7 @@ import (
 	"syscall"
 
 	"github.com/Syfra3/ancora/internal/embed"
+	"github.com/Syfra3/ancora/internal/embedding"
 	"github.com/Syfra3/ancora/internal/mcp"
 	"github.com/Syfra3/ancora/internal/project"
 	searchpkg "github.com/Syfra3/ancora/internal/search"
@@ -210,6 +211,14 @@ func cmdServe(cfg store.Config) {
 
 	srv := newHTTPServer(s, port)
 
+	// Wire async embedding service into the HTTP server.
+	if e, err := embed.New(); err == nil {
+		embSvc := embedding.New(e, embedding.NewStoreAdapter(s))
+		embSvc.Start()
+		defer embSvc.Stop()
+		srv.SetEmbeddingService(embSvc)
+	}
+
 	// Graceful shutdown on SIGINT/SIGTERM.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -269,16 +278,23 @@ func cmdMCP(cfg store.Config) {
 	// Initialize embedder for hybrid semantic search (FTS5 + vector RRF fusion).
 	// If model is unavailable, gracefully falls back to keyword-only search.
 	var embedder mcp.Embedder
+	var embSvc *embedding.Service
 	if e, err := embed.New(); err == nil {
 		embedder = e
 		log.Printf("[ancora] hybrid search enabled (model: %s)", e.ModelPath)
+
+		// Start async embedding service so new observations get embedded immediately.
+		embSvc = embedding.New(e, embedding.NewStoreAdapter(s))
+		embSvc.Start()
+		defer embSvc.Stop()
 	} else {
 		log.Printf("[ancora] hybrid search unavailable, using keyword-only: %v", err)
 	}
 
 	mcpCfg := mcp.MCPConfig{
-		DefaultProject: detectedProject,
-		Embedder:       embedder,
+		DefaultProject:   detectedProject,
+		Embedder:         embedder,
+		EmbeddingService: embSvc,
 	}
 
 	allowlist := resolveMCPTools(toolsFilter)
@@ -1663,31 +1679,14 @@ func cmdEmbeddingsBackfill(cfg store.Config) {
 		fatal(err)
 	}
 
-	observations, err := s.ListObservationsForEmbedding()
+	svc := embedding.New(embedder, embedding.NewStoreAdapter(s))
+	success, total, err := svc.Backfill()
 	if err != nil {
 		fatal(err)
 	}
 
-	fmt.Printf("Found %d observations to embed\n", len(observations))
-
-	successCount := 0
-	for i, obs := range observations {
-		if i%50 == 0 && i > 0 {
-			fmt.Printf("Progress: %d/%d\n", i, len(observations))
-		}
-		vec, err := embedder.Embed(obs.Title + ". " + obs.Content)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to embed #%d: %v\n", obs.ID, err)
-			continue
-		}
-		if err := s.SetEmbedding(obs.ID, vec); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to save embedding for #%d: %v\n", obs.ID, err)
-			continue
-		}
-		successCount++
-	}
-
-	fmt.Printf("✓ Backfill complete: %d/%d observations embedded\n", successCount, len(observations))
+	fmt.Printf("Found %d observations to embed\n", total)
+	fmt.Printf("✓ Backfill complete: %d/%d observations embedded\n", success, total)
 }
 
 func cmdEmbeddingsTest() {
@@ -1734,18 +1733,7 @@ func runBackfill(cfg store.Config) error {
 		return err
 	}
 
-	observations, err := s.ListObservationsForEmbedding()
-	if err != nil {
-		return err
-	}
-
-	for _, obs := range observations {
-		vec, err := embedder.Embed(obs.Title + ". " + obs.Content)
-		if err != nil {
-			continue
-		}
-		s.SetEmbedding(obs.ID, vec)
-	}
-
-	return nil
+	svc := embedding.New(embedder, embedding.NewStoreAdapter(s))
+	_, _, err = svc.Backfill()
+	return err
 }
