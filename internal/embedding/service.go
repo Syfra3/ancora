@@ -99,12 +99,17 @@ func (svc *Service) Start() {
 
 // Stop signals the worker to stop and waits for it to drain the queue.
 // Safe to call on a nil *Service or when the worker was never started.
+// Safe to call multiple times (idempotent).
 func (svc *Service) Stop() {
 	if svc == nil || svc.embedder == nil {
 		return
 	}
 
 	svc.mu.Lock()
+	if svc.stopped {
+		svc.mu.Unlock()
+		return
+	}
 	svc.stopped = true
 	svc.mu.Unlock()
 
@@ -142,6 +147,12 @@ func (svc *Service) Backfill() (int, int, error) {
 // it. On Stop(), it drains remaining items before exiting.
 func (svc *Service) worker() {
 	defer svc.wg.Done()
+	defer func() {
+		// Clear any leaked pendingTexts on shutdown to avoid memory leaks.
+		svc.mu.Lock()
+		svc.pendingTexts = make(map[int64]string)
+		svc.mu.Unlock()
+	}()
 
 	for {
 		select {

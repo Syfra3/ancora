@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Syfra3/ancora/internal/visibility"
 	_ "modernc.org/sqlite"
@@ -1043,7 +1044,7 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 	content := stripPrivateTags(p.Content)
 
 	if len(content) > s.cfg.MaxObservationLength {
-		content = content[:s.cfg.MaxObservationLength] + "... [truncated]"
+		content = truncateUTF8(content, s.cfg.MaxObservationLength, "... [truncated]")
 	}
 
 	// PR4: Auto-infer visibility if not provided
@@ -1216,7 +1217,7 @@ func (s *Store) AddPrompt(p AddPromptParams) (int64, error) {
 
 	content := stripPrivateTags(p.Content)
 	if len(content) > s.cfg.MaxObservationLength {
-		content = content[:s.cfg.MaxObservationLength] + "... [truncated]"
+		content = truncateUTF8(content, s.cfg.MaxObservationLength, "... [truncated]")
 	}
 
 	var promptID int64
@@ -1369,7 +1370,7 @@ func (s *Store) UpdateObservation(id int64, p UpdateObservationParams) (*Observa
 		if p.Content != nil {
 			content = stripPrivateTags(*p.Content)
 			if len(content) > s.cfg.MaxObservationLength {
-				content = content[:s.cfg.MaxObservationLength] + "... [truncated]"
+				content = truncateUTF8(content, s.cfg.MaxObservationLength, "... [truncated]")
 			}
 		}
 		if p.Workspace != nil {
@@ -1561,9 +1562,11 @@ func (s *Store) Timeline(observationID int64, before, after int) (*TimelineResul
 
 	// 5. Count total observations in the session for context
 	var totalInRange int
-	s.db.QueryRow(
+	if err := s.db.QueryRow(
 		"SELECT COUNT(*) FROM observations WHERE session_id = ? AND deleted_at IS NULL", focus.SessionID,
-	).Scan(&totalInRange)
+	).Scan(&totalInRange); err != nil {
+		return nil, fmt.Errorf("timeline: count observations: %w", err)
+	}
 
 	return &TimelineResult{
 		Focus:        *focus,
@@ -1619,21 +1622,25 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 		tkArgs = append(tkArgs, limit)
 
 		tkRows, err := s.queryItHook(s.db, tkSQL, tkArgs...)
-		if err == nil {
-			defer tkRows.Close()
-			for tkRows.Next() {
-				var sr SearchResult
-				if err := tkRows.Scan(
-					&sr.ID, &sr.SyncID, &sr.SessionID, &sr.Type, &sr.Title, &sr.Content,
-					&sr.ToolName, &sr.Workspace, &sr.Visibility, &sr.Organization,
-					&sr.TopicKey, &sr.RevisionCount, &sr.DuplicateCount,
-					&sr.LastSeenAt, &sr.CreatedAt, &sr.UpdatedAt, &sr.DeletedAt,
-				); err != nil {
-					break
-				}
-				sr.Rank = -1000
-				directResults = append(directResults, sr)
+		if err != nil {
+			return nil, fmt.Errorf("search: topic_key direct match query: %w", err)
+		}
+		defer tkRows.Close()
+		for tkRows.Next() {
+			var sr SearchResult
+			if err := tkRows.Scan(
+				&sr.ID, &sr.SyncID, &sr.SessionID, &sr.Type, &sr.Title, &sr.Content,
+				&sr.ToolName, &sr.Workspace, &sr.Visibility, &sr.Organization,
+				&sr.TopicKey, &sr.RevisionCount, &sr.DuplicateCount,
+				&sr.LastSeenAt, &sr.CreatedAt, &sr.UpdatedAt, &sr.DeletedAt,
+			); err != nil {
+				return nil, fmt.Errorf("search: topic_key scan: %w", err)
 			}
+			sr.Rank = -1000
+			directResults = append(directResults, sr)
+		}
+		if err := tkRows.Err(); err != nil {
+			return nil, fmt.Errorf("search: topic_key iteration: %w", err)
 		}
 	}
 
@@ -1804,7 +1811,7 @@ func (s *Store) SearchSemantic(queryVec []float32, limit int) ([]SearchResult, e
 			&sr.TopicKey, &sr.RevisionCount, &sr.DuplicateCount, &sr.LastSeenAt,
 			&sr.CreatedAt, &sr.UpdatedAt, &sr.DeletedAt, &blob,
 		); err != nil {
-			continue
+			return nil, fmt.Errorf("search semantic: scan row: %w", err)
 		}
 		vec := deserializeVec(blob)
 		if len(vec) == 0 {
@@ -1892,21 +1899,31 @@ func min(a, b int) int {
 func (s *Store) Stats() (*Stats, error) {
 	stats := &Stats{}
 
-	s.db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&stats.TotalSessions)
-	s.db.QueryRow("SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL").Scan(&stats.TotalObservations)
-	s.db.QueryRow("SELECT COUNT(*) FROM user_prompts").Scan(&stats.TotalPrompts)
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&stats.TotalSessions); err != nil {
+		return nil, fmt.Errorf("stats: count sessions: %w", err)
+	}
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL").Scan(&stats.TotalObservations); err != nil {
+		return nil, fmt.Errorf("stats: count observations: %w", err)
+	}
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM user_prompts").Scan(&stats.TotalPrompts); err != nil {
+		return nil, fmt.Errorf("stats: count prompts: %w", err)
+	}
 
 	rows, err := s.queryItHook(s.db, "SELECT workspace FROM observations WHERE workspace IS NOT NULL AND deleted_at IS NULL GROUP BY workspace ORDER BY MAX(created_at) DESC")
 	if err != nil {
-		return stats, nil
+		return nil, fmt.Errorf("stats: query workspaces: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var p string
-		if err := rows.Scan(&p); err == nil {
-			stats.Projects = append(stats.Projects, p)
+		if err := rows.Scan(&p); err != nil {
+			return nil, fmt.Errorf("stats: scan workspace: %w", err)
 		}
+		stats.Projects = append(stats.Projects, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("stats: iterate workspaces: %w", err)
 	}
 
 	return stats, nil
@@ -3359,6 +3376,14 @@ func (s *Store) queryObservations(query string, args ...any) ([]Observation, err
 }
 
 func (s *Store) addColumnIfNotExists(tableName, columnName, definition string) error {
+	// Strict identifier validation to prevent SQL injection
+	if !isValidSQLIdentifier(tableName) {
+		return fmt.Errorf("invalid table name: %q", tableName)
+	}
+	if !isValidSQLIdentifier(columnName) {
+		return fmt.Errorf("invalid column name: %q", columnName)
+	}
+
 	rows, err := s.queryItHook(s.db, fmt.Sprintf("PRAGMA table_info(%s)", tableName))
 	if err != nil {
 		return err
@@ -3384,6 +3409,31 @@ func (s *Store) addColumnIfNotExists(tableName, columnName, definition string) e
 
 	_, err = s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tableName, columnName, definition))
 	return err
+}
+
+// isValidSQLIdentifier validates that a string is a safe SQL identifier.
+// Allows: alphanumeric, underscore, and must start with letter or underscore.
+// This prevents SQL injection via table/column names in schema migrations.
+func isValidSQLIdentifier(name string) bool {
+	if name == "" {
+		return false
+	}
+	if len(name) > 128 {
+		return false
+	}
+	// Must start with letter or underscore
+	first := name[0]
+	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+		return false
+	}
+	// Rest must be alphanumeric or underscore
+	for i := 1; i < len(name); i++ {
+		c := name[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) migrateLegacyObservationsTable() error {
@@ -3844,13 +3894,42 @@ func stripPrivateTags(s string) string {
 	return result
 }
 
+// truncateUTF8 truncates a string to maxBytes while preserving UTF-8 integrity.
+// If the truncation point falls within a multi-byte UTF-8 character, it backs
+// off to the last complete character boundary. Appends suffix if truncated.
+// Ensures the final result (truncated + suffix) never exceeds maxBytes.
+func truncateUTF8(s string, maxBytes int, suffix string) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	// Reserve space for suffix to ensure final length never exceeds maxBytes
+	suffixLen := len(suffix)
+	if suffixLen >= maxBytes {
+		// Suffix alone is too large — return truncated suffix
+		return suffix[:maxBytes]
+	}
+	maxContentBytes := maxBytes - suffixLen
+	if maxContentBytes <= 0 {
+		return suffix[:maxBytes]
+	}
+	// Back off to last valid UTF-8 boundary
+	truncated := s[:maxContentBytes]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated + suffix
+}
+
 // sanitizeFTS wraps each word in quotes so FTS5 doesn't choke on special chars.
 // "fix auth bug" → `"fix" "auth" "bug"`
+// Embedded quotes within words are escaped to prevent FTS5 injection.
 func sanitizeFTS(query string) string {
 	words := strings.Fields(query)
 	for i, w := range words {
-		// Strip existing quotes to avoid double-quoting
+		// Strip existing outer quotes to avoid double-quoting
 		w = strings.Trim(w, `"`)
+		// Escape any embedded quotes within the word to prevent FTS5 injection
+		w = strings.ReplaceAll(w, `"`, `""`)
 		words[i] = `"` + w + `"`
 	}
 	return strings.Join(words, " ")

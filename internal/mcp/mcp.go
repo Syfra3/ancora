@@ -744,7 +744,9 @@ func handleSave(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		}
 
 		// Ensure the session exists
-		s.CreateSession(sessionID, workspace, "")
+		if err := s.CreateSession(sessionID, workspace, ""); err != nil {
+			return mcp.NewToolResultError("Failed to create session: " + err.Error()), nil
+		}
 
 		truncated := len(content) > s.MaxObservationLength()
 
@@ -893,7 +895,9 @@ func handleSavePrompt(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		}
 
 		// Ensure the session exists
-		s.CreateSession(sessionID, project, "")
+		if err := s.CreateSession(sessionID, project, ""); err != nil {
+			return mcp.NewToolResultError("Failed to create session: " + err.Error()), nil
+		}
 
 		_, err := s.AddPrompt(store.AddPromptParams{
 			SessionID: sessionID,
@@ -1073,7 +1077,9 @@ func handleSessionSummary(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc 
 		}
 
 		// Ensure the session exists
-		s.CreateSession(sessionID, project, "")
+		if err := s.CreateSession(sessionID, project, ""); err != nil {
+			return mcp.NewToolResultError("Failed to create session: " + err.Error()), nil
+		}
 
 		title := fmt.Sprintf("Session summary: %s", project)
 		obsID, err := s.AddObservation(store.AddObservationParams{
@@ -1148,7 +1154,9 @@ func handleCapturePassive(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc 
 
 		if sessionID == "" {
 			sessionID = defaultSessionID(project)
-			_ = s.CreateSession(sessionID, project, "")
+			if err := s.CreateSession(sessionID, project, ""); err != nil {
+				return mcp.NewToolResultError("Failed to create session: " + err.Error()), nil
+			}
 		}
 
 		if source == "" {
