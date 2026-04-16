@@ -27,6 +27,7 @@ import (
 
 	"github.com/Syfra3/ancora/internal/embed"
 	"github.com/Syfra3/ancora/internal/embedding"
+	"github.com/Syfra3/ancora/internal/ipc"
 	"github.com/Syfra3/ancora/internal/mcp"
 	"github.com/Syfra3/ancora/internal/project"
 	searchpkg "github.com/Syfra3/ancora/internal/search"
@@ -234,9 +235,10 @@ func cmdServe(cfg store.Config) {
 }
 
 func cmdMCP(cfg store.Config) {
-	// Parse --tools and --project/--workspace flags
+	// Parse --tools, --project/--workspace, and --events/--no-events flags.
 	toolsFilter := ""
 	projectOverride := ""
+	enableEvents := true // default: start IPC socket alongside MCP
 	for i := 2; i < len(os.Args); i++ {
 		if strings.HasPrefix(os.Args[i], "--tools=") {
 			toolsFilter = strings.TrimPrefix(os.Args[i], "--tools=")
@@ -253,6 +255,10 @@ func cmdMCP(cfg store.Config) {
 		} else if os.Args[i] == "--project" && i+1 < len(os.Args) {
 			projectOverride = os.Args[i+1]
 			i++
+		} else if os.Args[i] == "--events" {
+			enableEvents = true
+		} else if os.Args[i] == "--no-events" {
+			enableEvents = false
 		}
 	}
 
@@ -274,6 +280,15 @@ func cmdMCP(cfg store.Config) {
 		fatal(err)
 	}
 	defer s.Close()
+
+	// IPC event server — started alongside MCP unless --no-events is passed.
+	if enableEvents {
+		if ipcSrv, ipcErr := startIPCEventServer(s); ipcErr != nil {
+			log.Printf("[ancora] IPC event server unavailable: %v", ipcErr)
+		} else {
+			defer ipcSrv.Stop()
+		}
+	}
 
 	// Initialize embedder for hybrid semantic search (FTS5 + vector RRF fusion).
 	// If model is unavailable, gracefully falls back to keyword-only search.
@@ -303,6 +318,30 @@ func cmdMCP(cfg store.Config) {
 	if err := serveMCP(mcpSrv); err != nil {
 		fatal(err)
 	}
+}
+
+// startIPCEventServer initialises the shared secret, creates the IPC transport,
+// starts the server, and wires it into the store for event emission.
+// Returns the running *ipc.Server so the caller can defer Stop().
+func startIPCEventServer(s *store.Store) (*ipc.Server, error) {
+	secret, err := ipc.LoadOrCreateSecret("")
+	if err != nil {
+		return nil, fmt.Errorf("load IPC secret: %w", err)
+	}
+
+	transport, err := ipc.New("ancora", "")
+	if err != nil {
+		return nil, fmt.Errorf("create IPC transport: %w", err)
+	}
+
+	srv := ipc.NewServer(transport, secret)
+	if err := srv.Start(); err != nil {
+		return nil, fmt.Errorf("start IPC server: %w", err)
+	}
+
+	s.SetEventServer(srv)
+	log.Printf("[ancora] IPC event socket: %s", transport.Path())
+	return srv, nil
 }
 
 func cmdTUI(cfg store.Config) {

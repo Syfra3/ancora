@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Syfra3/ancora/internal/ipc"
 	"github.com/Syfra3/ancora/internal/visibility"
 	_ "modernc.org/sqlite"
 )
@@ -38,17 +39,20 @@ type Session struct {
 }
 
 type Observation struct {
-	ID             int64   `json:"id"`
-	SyncID         string  `json:"sync_id"`
-	SessionID      string  `json:"session_id"`
-	Type           string  `json:"type"`
-	Title          string  `json:"title"`
-	Content        string  `json:"content"`
-	ToolName       *string `json:"tool_name,omitempty"`
-	Workspace      *string `json:"workspace,omitempty"`
-	Visibility     string  `json:"visibility"`
-	Organization   *string `json:"organization,omitempty"`
-	TopicKey       *string `json:"topic_key,omitempty"`
+	ID           int64   `json:"id"`
+	SyncID       string  `json:"sync_id"`
+	SessionID    string  `json:"session_id"`
+	Type         string  `json:"type"`
+	Title        string  `json:"title"`
+	Content      string  `json:"content"`
+	ToolName     *string `json:"tool_name,omitempty"`
+	Workspace    *string `json:"workspace,omitempty"`
+	Visibility   string  `json:"visibility"`
+	Organization *string `json:"organization,omitempty"`
+	TopicKey     *string `json:"topic_key,omitempty"`
+	// References is a JSON-encoded array of ipc.Reference objects.
+	// Stored as TEXT in SQLite. Nil means no references have been set.
+	References     *string `json:"references,omitempty"`
 	RevisionCount  int     `json:"revision_count"`
 	DuplicateCount int     `json:"duplicate_count"`
 	LastSeenAt     *string `json:"last_seen_at,omitempty"`
@@ -124,6 +128,9 @@ type AddObservationParams struct {
 	Visibility   string `json:"visibility,omitempty"`
 	Organization string `json:"organization,omitempty"`
 	TopicKey     string `json:"topic_key,omitempty"`
+	// References is an optional JSON array string:
+	// e.g. `[{"type":"file","target":"internal/store/store.go"}]`
+	References string `json:"references,omitempty"`
 }
 
 type UpdateObservationParams struct {
@@ -134,6 +141,9 @@ type UpdateObservationParams struct {
 	Visibility   *string `json:"visibility,omitempty"`
 	Organization *string `json:"organization,omitempty"`
 	TopicKey     *string `json:"topic_key,omitempty"`
+	// References is an optional JSON array string for explicit links.
+	// Pass a pointer to an empty string ("") to clear references.
+	References *string `json:"references,omitempty"`
 }
 
 type Prompt struct {
@@ -288,10 +298,25 @@ func (s *Store) MaxObservationLength() int {
 
 // ─── Store ───────────────────────────────────────────────────────────────────
 
+// EventEmitter is the interface the Store uses to emit IPC events.
+// It is satisfied by *ipc.Server but kept as an interface to allow
+// testing without a real socket.
+type EventEmitter interface {
+	Emit(e ipc.Event)
+}
+
 type Store struct {
-	db    *sql.DB
-	cfg   Config
-	hooks storeHooks
+	db          *sql.DB
+	cfg         Config
+	hooks       storeHooks
+	eventServer EventEmitter // optional; nil = no IPC event emission
+}
+
+// SetEventServer attaches an IPC event server to the store.
+// After this call, every successful write (AddObservation, UpdateObservation,
+// DeleteObservation, CreateSession, EndSession) will emit an event.
+func (s *Store) SetEventServer(srv EventEmitter) {
+	s.eventServer = srv
 }
 
 type execer interface {
@@ -565,6 +590,8 @@ func (s *Store) migrate() error {
 		{name: "workspace", definition: "TEXT"},
 		{name: "visibility", definition: "TEXT NOT NULL DEFAULT 'work'"},
 		{name: "organization", definition: "TEXT"},
+		// IPC integration: explicit reference links (JSON array as TEXT)
+		{name: "references", definition: "TEXT"},
 	}
 	for _, c := range observationColumns {
 		if err := s.addColumnIfNotExists("observations", c.name, c.definition); err != nil {
@@ -839,7 +866,7 @@ func (s *Store) CreateSession(id, project, directory string) error {
 	// Normalize project name before storing
 	project, _ = NormalizeProject(project)
 
-	return s.withTx(func(tx *sql.Tx) error {
+	err := s.withTx(func(tx *sql.Tx) error {
 		if err := s.createSessionTx(tx, id, project, directory); err != nil {
 			return err
 		}
@@ -849,10 +876,20 @@ func (s *Store) CreateSession(id, project, directory string) error {
 			Directory: directory,
 		})
 	})
+	if err != nil {
+		return err
+	}
+	s.emitSessionEvent(ipc.EventSessionCreated, &Session{
+		ID:        id,
+		Project:   project,
+		Directory: directory,
+	})
+	return nil
 }
 
 func (s *Store) EndSession(id string, summary string) error {
-	return s.withTx(func(tx *sql.Tx) error {
+	var sess *Session
+	err := s.withTx(func(tx *sql.Tx) error {
 		res, err := s.execHook(tx,
 			`UPDATE sessions SET ended_at = datetime('now'), summary = ? WHERE id = ?`,
 			nullableString(summary), id,
@@ -877,7 +914,13 @@ func (s *Store) EndSession(id string, summary string) error {
 		).Scan(&project, &directory, &endedAt, &storedSummary); err != nil {
 			return err
 		}
-
+		sess = &Session{
+			ID:        id,
+			Project:   project,
+			Directory: directory,
+			EndedAt:   &endedAt,
+			Summary:   storedSummary,
+		}
 		return s.enqueueSyncMutationTx(tx, SyncEntitySession, id, SyncOpUpsert, syncSessionPayload{
 			ID:        id,
 			Project:   project,
@@ -886,6 +929,13 @@ func (s *Store) EndSession(id string, summary string) error {
 			Summary:   storedSummary,
 		})
 	})
+	if err != nil {
+		return err
+	}
+	if sess != nil {
+		s.emitSessionEvent(ipc.EventSessionEnded, sess)
+	}
+	return nil
 }
 
 func (s *Store) GetSession(id string) (*Session, error) {
@@ -990,7 +1040,7 @@ func (s *Store) AllObservations(workspace, visibility string, limit int) ([]Obse
 	query := `
 		SELECT o.id, ifnull(o.sync_id, '') as sync_id, o.session_id, o.type, o.title, o.content, o.tool_name,
 		       o.workspace, o.visibility, o.organization,
-		       o.topic_key, o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at
+		       o.topic_key, o."references", o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at
 		FROM observations o
 		WHERE o.deleted_at IS NULL
 	`
@@ -1022,7 +1072,7 @@ func (s *Store) SessionObservations(sessionID string, limit int) ([]Observation,
 	query := `
 		SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name,
 		       workspace, visibility, organization,
-		       topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+		       topic_key, "references", revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		FROM observations
 		WHERE session_id = ? AND deleted_at IS NULL
 		ORDER BY created_at ASC
@@ -1055,6 +1105,8 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 	topicKey := normalizeTopicKey(p.TopicKey)
 
 	var observationID int64
+	var committedObs *Observation
+	var isNewObs bool
 	err := s.withTx(func(tx *sql.Tx) error {
 		var obs *Observation
 		if topicKey != "" {
@@ -1096,6 +1148,7 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 				if err != nil {
 					return err
 				}
+				committedObs = obs
 				observationID = existingID
 				return s.enqueueObservationSyncTx(tx, obs)
 			}
@@ -1134,6 +1187,7 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 			if err != nil {
 				return err
 			}
+			committedObs = obs
 			observationID = existingID
 			return s.enqueueObservationSyncTx(tx, obs)
 		}
@@ -1147,13 +1201,13 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 			`INSERT INTO observations (
 				sync_id, session_id, type, title, content, tool_name,
 				workspace, visibility, organization,
-				topic_key, normalized_hash, revision_count, duplicate_count, last_seen_at, updated_at
+				topic_key, "references", normalized_hash, revision_count, duplicate_count, last_seen_at, updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), datetime('now'))`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), datetime('now'))`,
 			syncID, p.SessionID, p.Type, title, content,
 			nullableString(p.ToolName),
 			nullableString(p.Workspace), visibility, nullableString(p.Organization),
-			nullableString(topicKey), normHash,
+			nullableString(topicKey), nullableString(p.References), normHash,
 		)
 		if err != nil {
 			return err
@@ -1166,10 +1220,20 @@ func (s *Store) AddObservation(p AddObservationParams) (int64, error) {
 		if err != nil {
 			return err
 		}
+		isNewObs = true
+		committedObs = obs
 		return s.enqueueObservationSyncTx(tx, obs)
 	})
 	if err != nil {
 		return 0, err
+	}
+	// Emit IPC event after the transaction is committed.
+	if committedObs != nil {
+		eventType := ipc.EventObservationUpdated
+		if isNewObs {
+			eventType = ipc.EventObservationCreated
+		}
+		s.emitObservationEvent(eventType, committedObs)
 	}
 	return observationID, nil
 }
@@ -1185,7 +1249,7 @@ func (s *Store) RecentObservations(workspace, visibility string, limit int) ([]O
 	query := `
 		SELECT o.id, ifnull(o.sync_id, '') as sync_id, o.session_id, o.type, o.title, o.content, o.tool_name,
 		       o.workspace, o.visibility, o.organization,
-		       o.topic_key, o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at
+		       o.topic_key, o."references", o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at
 		FROM observations o
 		WHERE o.deleted_at IS NULL
 	`
@@ -1328,7 +1392,7 @@ func (s *Store) GetObservation(id int64) (*Observation, error) {
 	row := s.db.QueryRow(
 		`SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name,
 		        workspace, visibility, organization,
-		        topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+		        topic_key, "references", revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		 FROM observations WHERE id = ? AND deleted_at IS NULL`, id,
 	)
 	var o Observation
@@ -1336,7 +1400,7 @@ func (s *Store) GetObservation(id int64) (*Observation, error) {
 	if err := row.Scan(
 		&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content,
 		&o.ToolName, &o.Workspace, &o.Visibility, &o.Organization,
-		&o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
+		&o.TopicKey, &o.References, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
 		&o.CreatedAt, &o.UpdatedAt, &o.DeletedAt,
 	); err != nil {
 		return nil, err
@@ -1359,6 +1423,7 @@ func (s *Store) UpdateObservation(id int64, p UpdateObservationParams) (*Observa
 		visibility := obs.Visibility
 		organization := derefString(obs.Organization)
 		topicKey := derefString(obs.TopicKey)
+		references := derefString(obs.References)
 
 		if p.Type != nil {
 			typ = *p.Type
@@ -1384,6 +1449,9 @@ func (s *Store) UpdateObservation(id int64, p UpdateObservationParams) (*Observa
 		if p.TopicKey != nil {
 			topicKey = normalizeTopicKey(*p.TopicKey)
 		}
+		if p.References != nil {
+			references = *p.References
+		}
 
 		if _, err := s.execHook(tx,
 			`UPDATE observations
@@ -1394,6 +1462,7 @@ func (s *Store) UpdateObservation(id int64, p UpdateObservationParams) (*Observa
 			     visibility = ?,
 			     organization = ?,
 			     topic_key = ?,
+			     "references" = ?,
 			     normalized_hash = ?,
 			     revision_count = revision_count + 1,
 			     updated_at = datetime('now')
@@ -1405,6 +1474,7 @@ func (s *Store) UpdateObservation(id int64, p UpdateObservationParams) (*Observa
 			visibility,
 			nullableString(organization),
 			nullableString(topicKey),
+			nullableString(references),
 			hashNormalized(content),
 			id,
 		); err != nil {
@@ -1420,11 +1490,14 @@ func (s *Store) UpdateObservation(id int64, p UpdateObservationParams) (*Observa
 	if err != nil {
 		return nil, err
 	}
+	s.emitObservationEvent(ipc.EventObservationUpdated, updated)
 	return updated, nil
 }
 
 func (s *Store) DeleteObservation(id int64, hardDelete bool) error {
-	return s.withTx(func(tx *sql.Tx) error {
+	var deletedObsID int64
+	var deletedSyncID string
+	err := s.withTx(func(tx *sql.Tx) error {
 		obs, err := s.getObservationTx(tx, id)
 		if err == sql.ErrNoRows {
 			return nil
@@ -1432,6 +1505,8 @@ func (s *Store) DeleteObservation(id int64, hardDelete bool) error {
 		if err != nil {
 			return err
 		}
+		deletedObsID = obs.ID
+		deletedSyncID = obs.SyncID
 
 		deletedAt := Now()
 		if hardDelete {
@@ -1460,6 +1535,13 @@ func (s *Store) DeleteObservation(id int64, hardDelete bool) error {
 			HardDelete: hardDelete,
 		})
 	})
+	if err != nil {
+		return err
+	}
+	if deletedObsID > 0 {
+		s.emitDeletedEvent(deletedObsID, deletedSyncID)
+	}
+	return nil
 }
 
 // ─── Timeline ────────────────────────────────────────────────────────────────
@@ -1643,7 +1725,7 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 	sqlQ := `
 		SELECT o.id, ifnull(o.sync_id, '') as sync_id, o.session_id, o.type, o.title, o.content, o.tool_name,
 		       o.workspace, o.visibility, o.organization,
-		       o.topic_key, o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at,
+		       o.topic_key, o."references", o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at,
 		       fts.rank
 		FROM observations_fts fts
 		JOIN observations o ON o.id = fts.rowid
@@ -1692,7 +1774,7 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 		if err := rows.Scan(
 			&sr.ID, &sr.SyncID, &sr.SessionID, &sr.Type, &sr.Title, &sr.Content,
 			&sr.ToolName, &sr.Workspace, &sr.Visibility, &sr.Organization,
-			&sr.TopicKey, &sr.RevisionCount, &sr.DuplicateCount,
+			&sr.TopicKey, &sr.References, &sr.RevisionCount, &sr.DuplicateCount,
 			&sr.LastSeenAt, &sr.CreatedAt, &sr.UpdatedAt, &sr.DeletedAt,
 			&sr.Rank,
 		); err != nil {
@@ -3122,6 +3204,105 @@ func (s *Store) backfillPromptSyncMutationsTx(tx *sql.Tx, project string) error 
 // This is a hard security boundary — personal memories (finance, goals, health,
 // etc.) must never leave the local device regardless of project enrollment.
 // Use this instead of enqueueSyncMutationTx for all observation upserts.
+// ─── IPC Event Emission ───────────────────────────────────────────────────────
+
+// emitObservationEvent fires an IPC event for an observation change.
+// It is called AFTER the transaction commits so the event contains
+// the final committed state. It is a no-op when no event server is attached.
+func (s *Store) emitObservationEvent(eventType ipc.EventType, obs *Observation) {
+	if s.eventServer == nil {
+		return
+	}
+	payload := buildObservationPayload(obs)
+	raw, err := ipc.MarshalPayload(payload)
+	if err != nil {
+		return
+	}
+	s.eventServer.Emit(ipc.Event{
+		Type:      eventType,
+		Timestamp: time.Now(),
+		Payload:   raw,
+	})
+}
+
+// emitDeletedEvent fires an observation.deleted IPC event.
+func (s *Store) emitDeletedEvent(id int64, syncID string) {
+	if s.eventServer == nil {
+		return
+	}
+	raw, err := ipc.MarshalPayload(ipc.ObservationDeletedPayload{
+		ID:     id,
+		SyncID: syncID,
+	})
+	if err != nil {
+		return
+	}
+	s.eventServer.Emit(ipc.Event{
+		Type:      ipc.EventObservationDeleted,
+		Timestamp: time.Now(),
+		Payload:   raw,
+	})
+}
+
+// emitSessionEvent fires a session IPC event.
+func (s *Store) emitSessionEvent(eventType ipc.EventType, sess *Session) {
+	if s.eventServer == nil {
+		return
+	}
+	raw, err := ipc.MarshalPayload(ipc.SessionPayload{
+		ID:        sess.ID,
+		Project:   sess.Project,
+		Directory: sess.Directory,
+		Summary:   sess.Summary,
+	})
+	if err != nil {
+		return
+	}
+	s.eventServer.Emit(ipc.Event{
+		Type:      eventType,
+		Timestamp: time.Now(),
+		Payload:   raw,
+	})
+}
+
+// buildObservationPayload converts a store.Observation into an ipc.ObservationPayload.
+func buildObservationPayload(obs *Observation) ipc.ObservationPayload {
+	p := ipc.ObservationPayload{
+		ID:         obs.ID,
+		SyncID:     obs.SyncID,
+		SessionID:  obs.SessionID,
+		Type:       obs.Type,
+		Title:      obs.Title,
+		Content:    obs.Content,
+		Visibility: obs.Visibility,
+	}
+	if obs.Workspace != nil {
+		p.Workspace = *obs.Workspace
+	}
+	if obs.TopicKey != nil {
+		p.TopicKey = *obs.TopicKey
+	}
+	// Parse stored JSON references into ipc.Reference slice.
+	if obs.References != nil && *obs.References != "" {
+		var refs []ipc.Reference
+		if err := json.Unmarshal([]byte(*obs.References), &refs); err == nil {
+			p.References = refs
+		}
+	}
+	// Parse CreatedAt / UpdatedAt into time.Time.
+	if t, err := time.Parse("2006-01-02T15:04:05Z", obs.CreatedAt); err == nil {
+		p.CreatedAt = t
+	} else if t, err := time.Parse("2006-01-02 15:04:05", obs.CreatedAt); err == nil {
+		p.CreatedAt = t
+	}
+	if t, err := time.Parse("2006-01-02T15:04:05Z", obs.UpdatedAt); err == nil {
+		p.UpdatedAt = t
+	} else if t, err := time.Parse("2006-01-02 15:04:05", obs.UpdatedAt); err == nil {
+		p.UpdatedAt = t
+	}
+	return p
+}
+
 func (s *Store) enqueueObservationSyncTx(tx *sql.Tx, obs *Observation) error {
 	if obs.Visibility == "personal" {
 		return nil // hard block — personal visibility never enters sync journal
@@ -3213,11 +3394,11 @@ func decodeSyncPayload(payload []byte, dest any) error {
 func (s *Store) getObservationTx(tx *sql.Tx, id int64) (*Observation, error) {
 	row := tx.QueryRow(
 		`SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, workspace,
-		        visibility, organization, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+		        visibility, organization, topic_key, "references", revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		 FROM observations WHERE id = ? AND deleted_at IS NULL`, id,
 	)
 	var o Observation
-	if err := row.Scan(&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content, &o.ToolName, &o.Workspace, &o.Visibility, &o.Organization, &o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt, &o.CreatedAt, &o.UpdatedAt, &o.DeletedAt); err != nil {
+	if err := row.Scan(&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content, &o.ToolName, &o.Workspace, &o.Visibility, &o.Organization, &o.TopicKey, &o.References, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt, &o.CreatedAt, &o.UpdatedAt, &o.DeletedAt); err != nil {
 		return nil, err
 	}
 	return &o, nil
@@ -3225,7 +3406,7 @@ func (s *Store) getObservationTx(tx *sql.Tx, id int64) (*Observation, error) {
 
 func (s *Store) getObservationBySyncIDTx(tx *sql.Tx, syncID string, includeDeleted bool) (*Observation, error) {
 	query := `SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name, workspace,
-		        visibility, organization, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+		        visibility, organization, topic_key, "references", revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		 FROM observations WHERE sync_id = ?`
 	if !includeDeleted {
 		query += ` AND deleted_at IS NULL`
@@ -3233,7 +3414,7 @@ func (s *Store) getObservationBySyncIDTx(tx *sql.Tx, syncID string, includeDelet
 	query += ` ORDER BY id DESC LIMIT 1`
 	row := tx.QueryRow(query, syncID)
 	var o Observation
-	if err := row.Scan(&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content, &o.ToolName, &o.Workspace, &o.Visibility, &o.Organization, &o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt, &o.CreatedAt, &o.UpdatedAt, &o.DeletedAt); err != nil {
+	if err := row.Scan(&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content, &o.ToolName, &o.Workspace, &o.Visibility, &o.Organization, &o.TopicKey, &o.References, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt, &o.CreatedAt, &o.UpdatedAt, &o.DeletedAt); err != nil {
 		return nil, err
 	}
 	return &o, nil
@@ -3348,7 +3529,7 @@ func (s *Store) queryObservations(query string, args ...any) ([]Observation, err
 		if err := rows.Scan(
 			&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content,
 			&o.ToolName, &o.Workspace, &o.Visibility, &o.Organization,
-			&o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
+			&o.TopicKey, &o.References, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
 			&o.CreatedAt, &o.UpdatedAt, &o.DeletedAt,
 		); err != nil {
 			return nil, err
@@ -3382,7 +3563,8 @@ func (s *Store) addColumnIfNotExists(tableName, columnName, definition string) e
 		return err
 	}
 
-	_, err = s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tableName, columnName, definition))
+	// Quote the column name in case it's a SQLite reserved keyword (e.g. "references").
+	_, err = s.db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN "%s" %s`, tableName, columnName, definition))
 	return err
 }
 
@@ -3458,6 +3640,7 @@ func (s *Store) migrateLegacyObservationsTable() error {
 			workspace TEXT,
 			visibility TEXT NOT NULL DEFAULT 'work',
 			organization TEXT,
+			"references" TEXT,
 			FOREIGN KEY (session_id) REFERENCES sessions(id)
 		);
 	`); err != nil {

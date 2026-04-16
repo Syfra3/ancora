@@ -272,6 +272,11 @@ Examples:
 				mcp.WithString("topic_key",
 					mcp.Description("Optional topic identifier for upserts (e.g. architecture/auth-model). Reuses and updates the latest observation in same workspace+visibility."),
 				),
+				mcp.WithString("references",
+					mcp.Description(`Optional JSON array of explicit references to files, functions, or concepts.
+Format: [{"type":"file","target":"internal/store/store.go"},{"type":"function","target":"AddObservation"}]
+Types: "file" (file path), "function" (function/struct name), "concept" (named concept), "observation" (altro observation ID as string)`),
+				),
 			),
 			handleSave(s, cfg),
 		)
@@ -312,6 +317,10 @@ Examples:
 				),
 				mcp.WithString("topic_key",
 					mcp.Description("New topic key (normalized internally)"),
+				),
+				mcp.WithString("references",
+					mcp.Description(`Optional JSON array of explicit references. Pass an empty array "[]" to clear.
+Format: [{"type":"file","target":"internal/store/store.go"},{"type":"function","target":"AddObservation"}]`),
 				),
 			),
 			handleUpdate(s),
@@ -704,6 +713,7 @@ func handleSave(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		visibility, _ := req.GetArguments()["visibility"].(string)
 		organization, _ := req.GetArguments()["organization"].(string)
 		topicKey, _ := req.GetArguments()["topic_key"].(string)
+		references, _ := req.GetArguments()["references"].(string)
 
 		// Apply default workspace when LLM sends empty
 		if workspace == "" {
@@ -757,6 +767,7 @@ func handleSave(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 			Visibility:   visibility,
 			Organization: organization,
 			TopicKey:     topicKey,
+			References:   references,
 		})
 		if err != nil {
 			return mcp.NewToolResultError("Failed to save: " + err.Error()), nil
@@ -833,8 +844,11 @@ func handleUpdate(s *store.Store) server.ToolHandlerFunc {
 		if v, ok := req.GetArguments()["topic_key"].(string); ok {
 			update.TopicKey = &v
 		}
+		if v, ok := req.GetArguments()["references"].(string); ok {
+			update.References = &v
+		}
 
-		if update.Title == nil && update.Content == nil && update.Type == nil && update.Workspace == nil && update.Visibility == nil && update.Organization == nil && update.TopicKey == nil {
+		if update.Title == nil && update.Content == nil && update.Type == nil && update.Workspace == nil && update.Visibility == nil && update.Organization == nil && update.TopicKey == nil && update.References == nil {
 			return mcp.NewToolResultError("provide at least one field to update"), nil
 		}
 
@@ -1043,12 +1057,16 @@ func handleGetObservation(s *store.Store) server.ToolHandlerFunc {
 		}
 		duplicateMeta := fmt.Sprintf("\nDuplicates: %d", obs.DuplicateCount)
 		revisionMeta := fmt.Sprintf("\nRevisions: %d", obs.RevisionCount)
+		refsMeta := ""
+		if obs.References != nil && *obs.References != "" {
+			refsMeta = fmt.Sprintf("\nReferences: %s", *obs.References)
+		}
 
 		result := fmt.Sprintf("Ancora\n**Retrieving**: observation #%d\n\n#%d [%s] %s\n%s\nSession: %s%s%s\nCreated: %s",
 			id,
 			obs.ID, obs.Type, obs.Title,
 			obs.Content,
-			obs.SessionID, workspace+visibility+topic, toolName+duplicateMeta+revisionMeta,
+			obs.SessionID, workspace+visibility+topic, toolName+duplicateMeta+revisionMeta+refsMeta,
 			obs.CreatedAt,
 		)
 
