@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/Syfra3/ancora/compare/v1.2.3...v1.3.0) (2026-04-16)
+
+
+### Features
+
+* ipc events to comunicate with velaand sync ([80fe779](https://github.com/Syfra3/ancora/commit/80fe7794fd7ab3f1b59bdaf17d883bcbdcdb074c))
+
 ## [1.2.3](https://github.com/Syfra3/ancora/compare/v1.2.2...v1.2.3) (2026-04-12)
 
 
