@@ -1,5 +1,7 @@
 # Ancora - Persistent memory for AI agents
-.PHONY: build install test clean lint cross help dev run release release-check
+.PHONY: build install test test-verbose test-coverage clean lint cross help dev run release release-check
+
+GOTESTSUM=$(shell go env GOPATH)/bin/gotestsum
 
 BINARY_NAME=ancora
 MAIN_PATH=./cmd/ancora
@@ -34,12 +36,21 @@ run: build
 	@echo "Running $(BINARY_NAME)..."
 	@$(BUILD_DIR)/$(BINARY_NAME)
 
-## test: Run all tests
+## test: Run all tests with summary output (jest-style)
 test:
-	@echo "Running tests..."
+	@if command -v $(GOTESTSUM) >/dev/null 2>&1; then \
+		$(GOTESTSUM) --format testdox -- -race -coverprofile=coverage.out ./...; \
+	else \
+		echo "gotestsum not found. Install with: go install gotest.tools/gotestsum@latest"; \
+		exit 1; \
+	fi
+
+## test-verbose: Run all tests with full verbose output
+test-verbose:
+	@echo "Running tests (verbose)..."
 	$(GO) test -v -race -coverprofile=coverage.out ./...
 
-## test-coverage: Run tests with coverage report
+## test-coverage: Run tests and open HTML coverage report
 test-coverage: test
 	@echo "Generating coverage report..."
 	$(GO) tool cover -html=coverage.out -o coverage.html
@@ -122,7 +133,8 @@ help:
 	@echo "  install        - Install syfra to \$$GOPATH/bin"
 	@echo "  dev            - Build without optimization (faster for development)"
 	@echo "  run            - Build and run the binary"
-	@echo "  test           - Run all tests with race detection"
+	@echo "  test           - Run all tests with jest-style summary (requires gotestsum)"
+	@echo "  test-verbose   - Run all tests with full verbose output"
 	@echo "  test-coverage  - Run tests and generate HTML coverage report"
 	@echo "  lint           - Run golangci-lint"
 	@echo "  cross          - Cross-compile for all platforms"

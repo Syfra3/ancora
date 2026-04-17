@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -127,6 +128,49 @@ func (s *Server) Emit(e Event) {
 	}
 }
 
+// emitExcept serialises e and sends it to every authenticated client EXCEPT
+// the excluded connection. Used by the relay path to avoid echoing events
+// back to the client that sent them.
+func (s *Server) emitExcept(e Event, exclude *serverConn) {
+	wire, err := MarshalEvent(e)
+	if err != nil {
+		log.Printf("[ipc] server: marshal event %s: %v", e.Type, err)
+		return
+	}
+
+	s.mu.RLock()
+	clients := make([]*serverConn, 0, len(s.clients))
+	for sc := range s.clients {
+		if sc != exclude {
+			clients = append(clients, sc)
+		}
+	}
+	s.mu.RUnlock()
+
+	var dead []*serverConn
+	for _, sc := range clients {
+		sc.mu.Lock()
+		if _, err := sc.writer.Write(wire); err != nil {
+			dead = append(dead, sc)
+			sc.mu.Unlock()
+			continue
+		}
+		if err := sc.writer.Flush(); err != nil {
+			dead = append(dead, sc)
+		}
+		sc.mu.Unlock()
+	}
+
+	if len(dead) > 0 {
+		s.mu.Lock()
+		for _, sc := range dead {
+			delete(s.clients, sc)
+			sc.conn.Close()
+		}
+		s.mu.Unlock()
+	}
+}
+
 // ClientCount returns the number of currently authenticated subscribers.
 func (s *Server) ClientCount() int {
 	s.mu.RLock()
@@ -195,9 +239,25 @@ func (s *Server) handleConn(conn net.Conn) {
 	log.Printf("[ipc] server: client connected from %s (total: %d)", conn.RemoteAddr(), s.ClientCount())
 
 	// Block here until the connection drops (client disconnect / server Stop).
-	// We use a tiny scanner that discards any data the client might send.
+	// If the client sends a valid NDJSON Event line, re-broadcast it to all
+	// OTHER subscribers. This allows a secondary ancora process (e.g. a local
+	// dev build) to connect as a client and inject events through the primary
+	// server so that Vela and other listeners receive them normally.
 	for scanner.Scan() {
-		// Clients are subscribers only; ignore any incoming data.
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var e Event
+		if err := json.Unmarshal(line, &e); err != nil {
+			// Not a valid event — ignore silently.
+			continue
+		}
+		if e.Type == "" {
+			continue
+		}
+		log.Printf("[ipc] server: relaying %s event from %s", e.Type, conn.RemoteAddr())
+		s.emitExcept(e, sc)
 	}
 
 	s.mu.Lock()

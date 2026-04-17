@@ -286,7 +286,7 @@ func cmdMCP(cfg store.Config) {
 		if ipcSrv, ipcErr := startIPCEventServer(s); ipcErr != nil {
 			log.Printf("[ancora] IPC event server unavailable: %v", ipcErr)
 		} else {
-			defer ipcSrv.Stop()
+			defer ipcSrv()
 		}
 	}
 
@@ -320,10 +320,19 @@ func cmdMCP(cfg store.Config) {
 	}
 }
 
-// startIPCEventServer initialises the shared secret, creates the IPC transport,
-// starts the server, and wires it into the store for event emission.
-// Returns the running *ipc.Server so the caller can defer Stop().
-func startIPCEventServer(s *store.Store) (*ipc.Server, error) {
+// ipcStopper is the cleanup handle returned by startIPCEventServer.
+// *ipc.Server has Stop(); *ipc.Client has Close(). Both are wrapped here
+// so the caller can defer a single stop function.
+type ipcStopper func()
+
+// startIPCEventServer wires IPC event emission into the store.
+//
+// It first tries to START a new IPC server (bind the socket). If the socket
+// is already owned by another ancora process (EADDRINUSE), it falls back to
+// CONNECTING as a client — events are forwarded through the existing server,
+// so Vela receives them normally. This is the key path when running a local
+// dev build alongside the system-installed ancora MCP process.
+func startIPCEventServer(s *store.Store) (ipcStopper, error) {
 	secret, err := ipc.LoadOrCreateSecret("")
 	if err != nil {
 		return nil, fmt.Errorf("load IPC secret: %w", err)
@@ -334,14 +343,36 @@ func startIPCEventServer(s *store.Store) (*ipc.Server, error) {
 		return nil, fmt.Errorf("create IPC transport: %w", err)
 	}
 
+	// Try server mode first.
 	srv := ipc.NewServer(transport, secret)
-	if err := srv.Start(); err != nil {
-		return nil, fmt.Errorf("start IPC server: %w", err)
+	if startErr := srv.Start(); startErr == nil {
+		s.SetEventServer(srv)
+		log.Printf("[ancora] IPC event socket: %s (server mode)", transport.Path())
+		return srv.Stop, nil
+	} else if !isAddrInUse(startErr) {
+		// Unexpected error — propagate.
+		return nil, fmt.Errorf("start IPC server: %w", startErr)
 	}
 
-	s.SetEventServer(srv)
-	log.Printf("[ancora] IPC event socket: %s", transport.Path())
-	return srv, nil
+	// Socket owned by another process — connect as client.
+	log.Printf("[ancora] IPC socket busy, connecting as client to forward events")
+	client := ipc.NewClient(transport, secret)
+	if err := client.Connect(); err != nil {
+		return nil, fmt.Errorf("connect IPC client: %w", err)
+	}
+
+	s.SetEventServer(client)
+	log.Printf("[ancora] IPC event socket: %s (client mode)", transport.Path())
+	return client.Close, nil
+}
+
+// isAddrInUse reports whether err is an "address already in use" bind error.
+func isAddrInUse(err error) bool {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return errno == syscall.EADDRINUSE
+	}
+	return false
 }
 
 func cmdTUI(cfg store.Config) {
