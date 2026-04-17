@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/Syfra3/ancora/compare/v1.3.0...v1.4.0) (2026-04-17)
+
+
+### Features
+
+* **ipc:** forward events through active server socket ([#21](https://github.com/Syfra3/ancora/issues/21)) ([66eeceb](https://github.com/Syfra3/ancora/commit/66eeceb46c5f674596793d976799cf55bd7d2f13))
+
 ## [1.3.0](https://github.com/Syfra3/ancora/compare/v1.2.3...v1.3.0) (2026-04-16)
 
 
