@@ -89,12 +89,14 @@ func TestStore_Emit_ObservationCreated(t *testing.T) {
 	em.reset() // discard session.created events
 
 	id := mustAddObservation(t, s, AddObservationParams{
-		SessionID:  "s1",
-		Type:       "decision",
-		Title:      "Emit test",
-		Content:    "IPC test content",
-		Visibility: "work",
-		Workspace:  "myproject",
+		SessionID:    "s1",
+		Type:         "decision",
+		Title:        "Emit test",
+		Content:      "IPC test content",
+		Visibility:   "work",
+		Workspace:    "myproject",
+		Organization: "glim",
+		TopicKey:     "architecture/e2e",
 	})
 
 	events := em.received()
@@ -121,6 +123,18 @@ func TestStore_Emit_ObservationCreated(t *testing.T) {
 	}
 	if payload.Visibility != "work" {
 		t.Errorf("payload.Visibility: got %q", payload.Visibility)
+	}
+	if payload.Organization != "glim" {
+		t.Errorf("payload.Organization: got %q", payload.Organization)
+	}
+	if payload.TopicKey != "architecture/e2e" {
+		t.Errorf("payload.TopicKey: got %q", payload.TopicKey)
+	}
+	if payload.CreatedAt.IsZero() {
+		t.Error("payload.CreatedAt must be populated")
+	}
+	if payload.UpdatedAt.IsZero() {
+		t.Error("payload.UpdatedAt must be populated")
 	}
 }
 

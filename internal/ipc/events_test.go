@@ -71,15 +71,16 @@ func TestMarshalEvent_RoundTrip(t *testing.T) {
 
 func TestMarshalPayload_ObservationPayload(t *testing.T) {
 	p := ObservationPayload{
-		ID:         1,
-		SyncID:     "s1",
-		SessionID:  "sess1",
-		Type:       "decision",
-		Title:      "Auth architecture",
-		Content:    "Use JWT",
-		Workspace:  "myproject",
-		Visibility: "work",
-		TopicKey:   "architecture/auth",
+		ID:           1,
+		SyncID:       "s1",
+		SessionID:    "sess1",
+		Type:         "decision",
+		Title:        "Auth architecture",
+		Content:      "Use JWT",
+		Workspace:    "myproject",
+		Visibility:   "work",
+		Organization: "glim",
+		TopicKey:     "architecture/auth",
 		References: []Reference{
 			{Type: "file", Target: "internal/auth/auth.go"},
 			{Type: "concept", Target: "jwt"},
@@ -103,6 +104,9 @@ func TestMarshalPayload_ObservationPayload(t *testing.T) {
 	}
 	if got.Workspace != p.Workspace {
 		t.Errorf("Workspace: got %q, want %q", got.Workspace, p.Workspace)
+	}
+	if got.Organization != p.Organization {
+		t.Errorf("Organization: got %q, want %q", got.Organization, p.Organization)
 	}
 	if got.TopicKey != p.TopicKey {
 		t.Errorf("TopicKey: got %q, want %q", got.TopicKey, p.TopicKey)
@@ -216,6 +220,9 @@ func TestObservationPayload_OmitEmptyOptionals(t *testing.T) {
 	raw, _ := MarshalPayload(p)
 	if contains(raw, `"workspace"`) {
 		t.Errorf("expected no 'workspace' key when empty, got: %s", raw)
+	}
+	if contains(raw, `"organization"`) {
+		t.Errorf("expected no 'organization' key when empty, got: %s", raw)
 	}
 	if contains(raw, `"topic_key"`) {
 		t.Errorf("expected no 'topic_key' key when empty, got: %s", raw)

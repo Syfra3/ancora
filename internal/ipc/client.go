@@ -116,6 +116,9 @@ func (c *Client) authenticate(conn net.Conn) error {
 
 	scanner := bufio.NewScanner(conn)
 	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("no auth response: %w", err)
+		}
 		return fmt.Errorf("no auth response")
 	}
 	resp := strings.TrimSpace(scanner.Text())

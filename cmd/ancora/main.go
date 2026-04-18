@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -83,6 +84,10 @@ var (
 	llamaCppInstallInstructions = setup.GetLlamaCppInstallInstructions
 	scanInputLine               = fmt.Scanln
 	newEmbedder                 = func() (embed.Embedder, error) { return embed.New() }
+	ipcLoadOrCreateSecret       = ipc.LoadOrCreateSecret
+	ipcNewTransport             = ipc.New
+	ipcNewServer                = func(transport ipc.Transport, secret string) ipcServer { return ipc.NewServer(transport, secret) }
+	ipcNewClient                = func(transport ipc.Transport, secret string) ipcClient { return ipc.NewClient(transport, secret) }
 
 	searchMemories = func(s *store.Store, query string, opts store.SearchOptions) ([]store.SearchResult, searchpkg.Mode, error) {
 		embedder, err := newEmbedder()
@@ -325,6 +330,18 @@ func cmdMCP(cfg store.Config) {
 // so the caller can defer a single stop function.
 type ipcStopper func()
 
+type ipcServer interface {
+	Start() error
+	Stop()
+	Emit(ipc.Event)
+}
+
+type ipcClient interface {
+	Connect() error
+	Close()
+	Emit(ipc.Event)
+}
+
 // startIPCEventServer wires IPC event emission into the store.
 //
 // It first tries to START a new IPC server (bind the socket). If the socket
@@ -333,18 +350,18 @@ type ipcStopper func()
 // so Vela receives them normally. This is the key path when running a local
 // dev build alongside the system-installed ancora MCP process.
 func startIPCEventServer(s *store.Store) (ipcStopper, error) {
-	secret, err := ipc.LoadOrCreateSecret("")
+	secret, err := ipcLoadOrCreateSecret("")
 	if err != nil {
 		return nil, fmt.Errorf("load IPC secret: %w", err)
 	}
 
-	transport, err := ipc.New("ancora", "")
+	transport, err := ipcNewTransport("ancora", "")
 	if err != nil {
 		return nil, fmt.Errorf("create IPC transport: %w", err)
 	}
 
 	// Try server mode first.
-	srv := ipc.NewServer(transport, secret)
+	srv := ipcNewServer(transport, secret)
 	if startErr := srv.Start(); startErr == nil {
 		s.SetEventServer(srv)
 		log.Printf("[ancora] IPC event socket: %s (server mode)", transport.Path())
@@ -356,14 +373,41 @@ func startIPCEventServer(s *store.Store) (ipcStopper, error) {
 
 	// Socket owned by another process — connect as client.
 	log.Printf("[ancora] IPC socket busy, connecting as client to forward events")
-	client := ipc.NewClient(transport, secret)
+	client := ipcNewClient(transport, secret)
 	if err := client.Connect(); err != nil {
-		return nil, fmt.Errorf("connect IPC client: %w", err)
+		if !shouldReclaimIPCServer(err) {
+			return nil, fmt.Errorf("connect IPC client: %w", err)
+		}
+
+		log.Printf("[ancora] IPC socket owner is unresponsive, reclaiming %s", transport.Path())
+		if err := transport.Close(); err != nil {
+			return nil, fmt.Errorf("reclaim IPC socket %s: %w", transport.Path(), err)
+		}
+		if err := srv.Start(); err != nil {
+			return nil, fmt.Errorf("restart IPC server after reclaim: %w", err)
+		}
+
+		s.SetEventServer(srv)
+		log.Printf("[ancora] IPC event socket: %s (server mode, reclaimed)", transport.Path())
+		return srv.Stop, nil
 	}
 
 	s.SetEventServer(client)
 	log.Printf("[ancora] IPC event socket: %s (client mode)", transport.Path())
 	return client.Close, nil
+}
+
+func shouldReclaimIPCServer(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	return strings.Contains(err.Error(), "no auth response")
 }
 
 // isAddrInUse reports whether err is an "address already in use" bind error.
