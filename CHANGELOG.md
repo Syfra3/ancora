@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/Syfra3/ancora/compare/v1.4.0...v1.5.0) (2026-04-18)
+
+
+### Features
+
+* **ipc:** add socket recovery and organization field to payload ([#23](https://github.com/Syfra3/ancora/issues/23)) ([2d83564](https://github.com/Syfra3/ancora/commit/2d83564f363f83332151caa38d6744c3c217505f))
+
 ## [1.4.0](https://github.com/Syfra3/ancora/compare/v1.3.0...v1.4.0) (2026-04-17)
 
 
