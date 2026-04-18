@@ -3279,6 +3279,9 @@ func buildObservationPayload(obs *Observation) ipc.ObservationPayload {
 	if obs.Workspace != nil {
 		p.Workspace = *obs.Workspace
 	}
+	if obs.Organization != nil {
+		p.Organization = *obs.Organization
+	}
 	if obs.TopicKey != nil {
 		p.TopicKey = *obs.TopicKey
 	}
