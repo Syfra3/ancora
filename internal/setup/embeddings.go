@@ -59,6 +59,9 @@ func CheckEmbeddingsStatus() (*EmbeddingsSetupResult, error) {
 
 	// Check model file
 	modelPath := filepath.Join(embedModelPath(), embedModelFile)
+	if override := strings.TrimSpace(os.Getenv("ANCORA_EMBED_MODEL")); override != "" {
+		modelPath = override
+	}
 	if _, err := osStat(modelPath); err == nil {
 		result.ModelInstalled = true
 		result.ModelPath = modelPath

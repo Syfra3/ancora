@@ -35,12 +35,12 @@ func TestIntegrationSaveEmbedHybridSearch(t *testing.T) {
 	}
 
 	id, err := s.AddObservation(AddObservationParams{
-		SessionID: sessID,
-		Type:      "decision",
-		Title:     "Chose Go for local client",
-		Content:   "Go compiles to a single binary with no runtime dependencies, ideal for CLI tools.",
-		Workspace:   "integ-project",
-		Visibility:     "project",
+		SessionID:  sessID,
+		Type:       "decision",
+		Title:      "Chose Go for local client",
+		Content:    "Go compiles to a single binary with no runtime dependencies, ideal for CLI tools.",
+		Workspace:  "integ-project",
+		Visibility: "project",
 	})
 	if err != nil {
 		t.Fatalf("AddObservation: %v", err)

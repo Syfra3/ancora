@@ -1,7 +1,9 @@
 # Ancora - Persistent memory for AI agents
-.PHONY: build install test test-verbose test-coverage clean lint cross help dev run release release-check
+.PHONY: build install test test-ci test-verbose test-coverage clean fmt fmt-check lint verify verify-ci cross help dev run release release-check hooks-install
 
 GOTESTSUM=$(shell go env GOPATH)/bin/gotestsum
+LEFTHOOK=$(shell go env GOPATH)/bin/lefthook
+GOLANGCI_LINT_VERSION?=v2.5.0
 
 BINARY_NAME=ancora
 MAIN_PATH=./cmd/ancora
@@ -36,6 +38,24 @@ run: build
 	@echo "Running $(BINARY_NAME)..."
 	@$(BUILD_DIR)/$(BINARY_NAME)
 
+## fmt: Format all Go files in the repository
+fmt:
+	@echo "Formatting Go files..."
+	@FILES=$$(find . -name '*.go' -not -path './vendor/*'); \
+	if [ -n "$$FILES" ]; then \
+		gofmt -w $$FILES; \
+	fi
+
+## fmt-check: Fail if Go files are not formatted with gofmt
+fmt-check:
+	@echo "Checking Go formatting..."
+	@UNFORMATTED=$$(find . -name '*.go' -not -path './vendor/*' -exec gofmt -l {} +); \
+	if [ -n "$$UNFORMATTED" ]; then \
+		echo "The following files need gofmt:"; \
+		echo "$$UNFORMATTED"; \
+		exit 1; \
+	fi
+
 ## test: Run all tests with summary output (jest-style)
 test:
 	@if command -v $(GOTESTSUM) >/dev/null 2>&1; then \
@@ -43,6 +63,15 @@ test:
 	else \
 		echo "gotestsum not found. Install with: go install gotest.tools/gotestsum@latest"; \
 		exit 1; \
+	fi
+
+## test-ci: Run all tests with gotestsum output
+test-ci:
+	@echo "Running tests..."
+	@if command -v $(GOTESTSUM) >/dev/null 2>&1; then \
+		$(GOTESTSUM) --format testdox -- -race -coverprofile=coverage.out ./...; \
+	else \
+		$(GO) test -v -race -coverprofile=coverage.out ./...; \
 	fi
 
 ## test-verbose: Run all tests with full verbose output
@@ -56,15 +85,16 @@ test-coverage: test
 	$(GO) tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report at coverage.html"
 
-## lint: Run golangci-lint (requires golangci-lint installed)
+## lint: Run the pinned golangci-lint baseline
 lint:
 	@echo "Running linter..."
-	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run ./...; \
-	else \
-		echo "golangci-lint not found. Install with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \
-		exit 1; \
-	fi
+	$(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
+
+## verify: Run the full local quality gate
+verify: fmt-check lint test-ci build
+
+## verify-ci: Run the CI quality gate
+verify-ci: verify
 
 ## cross: Cross-compile for multiple platforms
 cross:
@@ -88,6 +118,12 @@ clean:
 tidy:
 	@echo "Running go mod tidy..."
 	$(GO) mod tidy
+
+## hooks-install: Install repository-managed git hooks with lefthook
+hooks-install:
+	@echo "Installing git hooks with lefthook..."
+	@go install github.com/evilmartians/lefthook@latest
+	@$(LEFTHOOK) install
 
 ## deps: Download dependencies
 deps:
@@ -133,14 +169,20 @@ help:
 	@echo "  install        - Install syfra to \$$GOPATH/bin"
 	@echo "  dev            - Build without optimization (faster for development)"
 	@echo "  run            - Build and run the binary"
+	@echo "  fmt            - Format all Go files"
+	@echo "  fmt-check      - Check for unformatted Go files"
 	@echo "  test           - Run all tests with jest-style summary (requires gotestsum)"
+	@echo "  test-ci        - Run all tests without gotestsum"
 	@echo "  test-verbose   - Run all tests with full verbose output"
 	@echo "  test-coverage  - Run tests and generate HTML coverage report"
 	@echo "  lint           - Run golangci-lint"
+	@echo "  verify         - Run format, lint, test, and build checks"
+	@echo "  verify-ci      - Run CI format, test, and build checks"
 	@echo "  cross          - Cross-compile for all platforms"
 	@echo "  release-check  - Verify prerequisites for release"
 	@echo "  release        - Create and push a new release (requires git tag)"
 	@echo "  clean          - Remove build artifacts"
 	@echo "  tidy           - Run go mod tidy"
 	@echo "  deps           - Download dependencies"
+	@echo "  hooks-install  - Install git hooks with lefthook"
 	@echo "  help           - Show this help message"

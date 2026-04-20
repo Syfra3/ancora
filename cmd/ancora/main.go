@@ -228,10 +228,17 @@ func cmdServe(cfg store.Config) {
 	// Graceful shutdown on SIGINT/SIGTERM.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		<-sigCh
-		log.Println("[ancora] shutting down...")
-		exitFunc(0)
+		select {
+		case <-sigCh:
+			log.Println("[ancora] shutting down...")
+			exitFunc(0)
+		case <-done:
+			return
+		}
 	}()
 
 	if err := startHTTP(srv); err != nil {

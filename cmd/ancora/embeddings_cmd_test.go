@@ -199,22 +199,22 @@ func TestRunBackfillUsesEmbeddingsForSemanticRetrieval(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	if _, err := s.AddObservation(store.AddObservationParams{
-		SessionID: "backfill-session",
-		Type:      "decision",
-		Title:     "Database query tuning",
-		Content:   "Database indexes made the slow query fast.",
-		Workspace:   "searchproj",
-		Visibility:     "project",
+		SessionID:  "backfill-session",
+		Type:       "decision",
+		Title:      "Database query tuning",
+		Content:    "Database indexes made the slow query fast.",
+		Workspace:  "searchproj",
+		Visibility: "project",
 	}); err != nil {
 		t.Fatalf("AddObservation database: %v", err)
 	}
 	if _, err := s.AddObservation(store.AddObservationParams{
-		SessionID: "backfill-session",
-		Type:      "decision",
-		Title:     "Frontend button polish",
-		Content:   "React UI cleanup for the settings button.",
-		Workspace:   "searchproj",
-		Visibility:     "project",
+		SessionID:  "backfill-session",
+		Type:       "decision",
+		Title:      "Frontend button polish",
+		Content:    "React UI cleanup for the settings button.",
+		Workspace:  "searchproj",
+		Visibility: "project",
 	}); err != nil {
 		t.Fatalf("AddObservation frontend: %v", err)
 	}

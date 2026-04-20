@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"github.com/Syfra3/ancora/internal/mcp"
 	"github.com/Syfra3/ancora/internal/store"
 	versioncheck "github.com/Syfra3/ancora/internal/version"
+	tea "github.com/charmbracelet/bubbletea"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
@@ -533,6 +535,26 @@ func TestMainPrintsUpdateFailuresAndUpdates(t *testing.T) {
 }
 
 func TestMainExitPaths(t *testing.T) {
+	t.Run("no args", func(t *testing.T) {
+		stubRuntimeHooks(t)
+		stubExitWithPanic(t)
+		withArgs(t, "ancora")
+
+		runTeaProgram = func(*tea.Program) (tea.Model, error) {
+			return nil, errors.New("could not open a new TTY")
+		}
+
+		_, stderr, recovered := captureOutputAndRecover(t, func() { main() })
+
+		code, ok := recovered.(exitCode)
+		if !ok || int(code) != 1 {
+			t.Fatalf("expected exit code 1 panic, got %v", recovered)
+		}
+		if !strings.Contains(stderr, "could not open a new TTY") {
+			t.Fatalf("stderr missing TTY failure: %q", stderr)
+		}
+	})
+
 	tests := []struct {
 		name            string
 		helperCase      string
@@ -540,7 +562,6 @@ func TestMainExitPaths(t *testing.T) {
 		expectedStderr  string
 		expectedExitOne bool
 	}{
-		{name: "no args", helperCase: "no-args", expectedOutput: "could not open a new TTY", expectedExitOne: true},
 		{name: "unknown command", helperCase: "unknown", expectedOutput: "Usage:", expectedStderr: "unknown command:", expectedExitOne: true},
 	}
 
