@@ -1,0 +1,13 @@
+pre-commit:
+  commands:
+    fmt-check:
+      run: make fmt-check
+    lint:
+      run: make lint
+
+pre-push:
+  commands:
+    test:
+      run: make test-ci
+    build:
+      run: make build

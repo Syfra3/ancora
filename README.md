@@ -486,13 +486,25 @@ ANCORA_EMBED_MODEL=/path/model     # Path to GGUF embedding model
 ## Testing
 
 ```bash
-# Run all tests
-cd ancora
+# Run the full PR quality gate locally
+make verify
+
+# Run all tests only
 go test ./...
 
 # Test coverage: 621 tests across 10 packages
 # Status: ALL PASSING
 ```
+
+Install repository-managed hooks to catch problems before push:
+
+```bash
+make hooks-install
+```
+
+`make lint` and `make verify` download the pinned `golangci-lint` version automatically on first run.
+
+`make verify` uses `gotestsum` when available for cleaner progress output and falls back to `go test -v` otherwise.
 
 Tested packages:
 - cmd/ancora (CLI commands)
