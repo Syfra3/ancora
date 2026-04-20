@@ -546,6 +546,12 @@ func installClaudeCode() (*Result, error) {
 }
 
 func detectInstallMode() string {
+	if state, err := LoadIntegrationState(); err == nil && state != nil {
+		switch state.Mode {
+		case ModeAncoraOnly, ModeAncoraVela:
+			return state.Mode
+		}
+	}
 	if _, err := lookPathFn("vela"); err == nil {
 		return ModeAncoraVela
 	}

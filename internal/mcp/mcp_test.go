@@ -3,9 +3,11 @@ package mcp
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/Syfra3/ancora/internal/setup"
 	"github.com/Syfra3/ancora/internal/store"
 	mcppkg "github.com/mark3labs/mcp-go/mcp"
 )
@@ -90,6 +92,29 @@ func TestNewServerWithVelaRegistersForwardedTools(t *testing.T) {
 		if tools[name] == nil {
 			t.Fatalf("expected forwarded tool %q to be registered", name)
 		}
+	}
+}
+
+func TestDefaultDetectVelaIntegrationRespectsPersistedMode(t *testing.T) {
+	home := t.TempDir()
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", home)
+	defer os.Setenv("HOME", originalHome)
+
+	if err := setup.SaveIntegrationState(setup.IntegrationState{Mode: setup.ModeAncoraOnly}); err != nil {
+		t.Fatalf("SaveIntegrationState() error = %v", err)
+	}
+
+	if cfg := defaultDetectVelaIntegration(); cfg != nil {
+		t.Fatalf("expected no Vela proxy in ancora-only mode, got %#v", cfg)
+	}
+
+	if err := setup.SaveIntegrationState(setup.IntegrationState{Mode: setup.ModeAncoraVela}); err != nil {
+		t.Fatalf("SaveIntegrationState() error = %v", err)
+	}
+
+	if cfg := defaultDetectVelaIntegration(); cfg == nil {
+		t.Fatal("expected Vela proxy config in ancora+vela mode when vela is available")
 	}
 }
 

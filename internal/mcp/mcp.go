@@ -24,6 +24,7 @@ import (
 	"github.com/Syfra3/ancora/internal/embedding"
 	projectpkg "github.com/Syfra3/ancora/internal/project"
 	"github.com/Syfra3/ancora/internal/search"
+	"github.com/Syfra3/ancora/internal/setup"
 	"github.com/Syfra3/ancora/internal/store"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -694,6 +695,12 @@ func effectiveVelaConfig(cfg MCPConfig) *VelaProxyConfig {
 }
 
 func defaultDetectVelaIntegration() *VelaProxyConfig {
+	state, err := setup.LoadIntegrationState()
+	if err == nil && state != nil {
+		if state.Mode != setup.ModeAncoraVela {
+			return nil
+		}
+	}
 	path, err := exec.LookPath("vela")
 	if err != nil {
 		return nil

@@ -306,6 +306,20 @@ func TestInstallUnknownAgent(t *testing.T) {
 	}
 }
 
+func TestDetectInstallModeUsesPersistedIntegrationState(t *testing.T) {
+	resetSetupSeams(t)
+	home := useTestHome(t)
+	lookPathFn = func(string) (string, error) { return "", errors.New("missing") }
+
+	if err := SaveIntegrationState(IntegrationState{Mode: ModeAncoraVela}); err != nil {
+		t.Fatalf("SaveIntegrationState() error = %v", err)
+	}
+
+	if got := detectInstallMode(); got != ModeAncoraVela {
+		t.Fatalf("detectInstallMode() = %q, want %q (home=%s)", got, ModeAncoraVela, home)
+	}
+}
+
 func TestInstallOpenCodeSuccessAndMCPRegistered(t *testing.T) {
 	resetSetupSeams(t)
 	home := useTestHome(t)
