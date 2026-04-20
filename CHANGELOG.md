@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0](https://github.com/Syfra3/ancora/compare/v1.7.0...v1.8.0) (2026-04-20)
+
+
+### Features
+
+* manual build binaries and release ([9b70039](https://github.com/Syfra3/ancora/commit/9b70039ac8b856064ca1569849a0fe99401b718c))
+
 ## [1.6.0](https://github.com/Syfra3/ancora/compare/v1.5.0...v1.6.0) (2026-04-20)
 
 
