@@ -156,6 +156,36 @@ func TestCheckEmbeddingsStatus(t *testing.T) {
 			t.Errorf("expected CLI not available")
 		}
 	})
+
+	t.Run("env override model path", func(t *testing.T) {
+		t.Setenv("ANCORA_EMBED_MODEL", "/tmp/custom-model.gguf")
+		embedModelPath = func() string { return "/home/test/.ancora/models" }
+		embedModelFile = "test-model.gguf"
+		osStat = func(name string) (os.FileInfo, error) {
+			if name == "/tmp/custom-model.gguf" {
+				return nil, nil
+			}
+			return nil, os.ErrNotExist
+		}
+		execLookPath = func(file string) (string, error) {
+			if file == "llama-embedding" {
+				return "/usr/bin/llama-embedding", nil
+			}
+			return "", errors.New("not found")
+		}
+		testEmbedderFn = func() (int, error) { return embed.Dims, nil }
+
+		result, err := CheckEmbeddingsStatus()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.ModelInstalled {
+			t.Fatalf("expected model installed via env override")
+		}
+		if result.ModelPath != "/tmp/custom-model.gguf" {
+			t.Fatalf("expected override model path, got %q", result.ModelPath)
+		}
+	})
 }
 
 func TestDownloadModel(t *testing.T) {
