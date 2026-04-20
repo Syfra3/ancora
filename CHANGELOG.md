@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/Syfra3/ancora/compare/v1.8.0...v1.9.0) (2026-04-20)
+
+
+### Features
+
+* **setup:** honor shared ancora vela mode ([#31](https://github.com/Syfra3/ancora/issues/31)) ([e4677b4](https://github.com/Syfra3/ancora/commit/e4677b412195773d56fac95c381ae7820c52d438))
+
 ## [1.8.0](https://github.com/Syfra3/ancora/compare/v1.7.0...v1.8.0) (2026-04-20)
 
 
