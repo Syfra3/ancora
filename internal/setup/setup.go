@@ -65,7 +65,13 @@ type Result struct {
 	Agent       string
 	Destination string
 	Files       int
+	Mode        string
 }
+
+const (
+	ModeAncoraOnly = "ancora-only"
+	ModeAncoraVela = "ancora+vela"
+)
 
 const claudeCodeMarketplace = "Syfra3/ancora"
 
@@ -298,6 +304,7 @@ func patchAncorBINLine(src []byte, absBin string) []byte {
 }
 
 func installOpenCode() (*Result, error) {
+	mode := detectInstallMode()
 	dir := openCodePluginDir()
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create plugin dir %s: %w", dir, err)
@@ -337,6 +344,7 @@ func installOpenCode() (*Result, error) {
 		Agent:       "opencode",
 		Destination: dir,
 		Files:       files,
+		Mode:        mode,
 	}, nil
 }
 
@@ -489,6 +497,7 @@ func stripJSONC(data []byte) []byte {
 // ─── Claude Code ─────────────────────────────────────────────────────────────
 
 func installClaudeCode() (*Result, error) {
+	mode := detectInstallMode()
 	// Check that claude CLI is available
 	claudeBin, err := lookPathFn("claude")
 	if err != nil {
@@ -532,7 +541,15 @@ func installClaudeCode() (*Result, error) {
 		Agent:       "claude-code",
 		Destination: claudeCodeMCPDir(),
 		Files:       files,
+		Mode:        mode,
 	}, nil
+}
+
+func detectInstallMode() string {
+	if _, err := lookPathFn("vela"); err == nil {
+		return ModeAncoraVela
+	}
+	return ModeAncoraOnly
 }
 
 // claudeCodeMCPDir returns the directory for user-level Claude Code MCP configs.

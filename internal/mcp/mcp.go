@@ -15,13 +15,17 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/Syfra3/ancora/internal/embedding"
 	projectpkg "github.com/Syfra3/ancora/internal/project"
 	"github.com/Syfra3/ancora/internal/search"
 	"github.com/Syfra3/ancora/internal/store"
+	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -37,9 +41,29 @@ type MCPConfig struct {
 	DefaultProject   string             // Auto-detected project name, used when LLM sends empty project
 	Embedder         Embedder           // Optional: enables hybrid search. nil = keyword-only.
 	EmbeddingService *embedding.Service // Optional: triggers async embedding after save.
+	Vela             *VelaProxyConfig   // Optional: enables forwarded vela_* graph tools.
+}
+
+// VelaProxyConfig describes how Ancora reaches a local Vela MCP server.
+type VelaProxyConfig struct {
+	Command string
+	Args    []string
+	Env     []string
+}
+
+type velaMCPClient interface {
+	Initialize(ctx context.Context, request mcp.InitializeRequest) (*mcp.InitializeResult, error)
+	CallTool(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)
+	Close() error
 }
 
 var suggestTopicKey = store.SuggestTopicKey
+
+var detectVelaIntegration = defaultDetectVelaIntegration
+
+var newVelaProxyClient = func(cfg VelaProxyConfig) (velaMCPClient, error) {
+	return mcpclient.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
+}
 
 var loadMCPStats = func(s *store.Store) (*store.Stats, error) {
 	return s.Stats()
@@ -61,17 +85,24 @@ var loadMCPStats = func(s *store.Store) (*store.Stats, error) {
 // Sourced from actual skill files and memory protocol instructions
 // across all 4 supported agents (Claude Code, OpenCode, Gemini CLI, Codex).
 var ProfileAgent = map[string]bool{
-	"save":          true, // proactive save — referenced 17 times across protocols
-	"search":        true, // search past memories — referenced 6 times
-	"context":       true, // recent context from previous sessions — referenced 10 times
-	"summarize":     true, // end-of-session summary — referenced 16 times
-	"start":         true, // register session start
-	"end":           true, // mark session completed
-	"get":           true, // full observation content after search — referenced 4 times
-	"suggest_topic": true, // stable topic key for upserts — referenced 3 times
-	"capture":       true, // extract learnings from text — referenced in Gemini/Codex protocol
-	"save_prompt":   true, // save user prompts
-	"update":        true, // update observation by ID — skills say "use ancora_update when you have an exact ID to correct"
+	"save":                  true, // proactive save — referenced 17 times across protocols
+	"search":                true, // search past memories — referenced 6 times
+	"context":               true, // recent context from previous sessions — referenced 10 times
+	"summarize":             true, // end-of-session summary — referenced 16 times
+	"start":                 true, // register session start
+	"end":                   true, // mark session completed
+	"get":                   true, // full observation content after search — referenced 4 times
+	"suggest_topic":         true, // stable topic key for upserts — referenced 3 times
+	"capture":               true, // extract learnings from text — referenced in Gemini/Codex protocol
+	"save_prompt":           true, // save user prompts
+	"update":                true, // update observation by ID — skills say "use ancora_update when you have an exact ID to correct"
+	"vela_query_graph":      true,
+	"vela_shortest_path":    true,
+	"vela_get_node":         true,
+	"vela_get_neighbors":    true,
+	"vela_graph_stats":      true,
+	"vela_explain_graph":    true,
+	"vela_federated_search": true,
 }
 
 // ProfileAdmin contains tools for TUI, dashboards, and manual curation
@@ -148,6 +179,10 @@ DEFERRED TOOLS (use ToolSearch when needed):
   ancora_update, ancora_suggest_topic, ancora_start, ancora_end,
   ancora_stats, ancora_delete, ancora_timeline, ancora_capture, ancora_merge
 
+OPTIONAL GRAPH TOOLS (available when Vela is installed):
+  vela_query_graph, vela_shortest_path, vela_get_node, vela_get_neighbors,
+  vela_graph_stats, vela_explain_graph, vela_federated_search
+
 PROACTIVE SAVE RULE: Call ancora_save immediately after ANY decision, bug fix, discovery, or convention — not just when asked.`
 
 // NewServerWithTools creates an MCP server registering only the tools in
@@ -167,6 +202,9 @@ func NewServerWithConfig(s *store.Store, cfg MCPConfig, allowlist map[string]boo
 	)
 
 	registerTools(srv, s, cfg, allowlist)
+	if velaCfg := effectiveVelaConfig(cfg); velaCfg != nil {
+		registerVelaTools(srv, *velaCfg, allowlist)
+	}
 	return srv
 }
 
@@ -646,6 +684,135 @@ Duplicates are automatically detected and skipped — safe to call multiple time
 			handleMergeProjects(s),
 		)
 	}
+}
+
+func effectiveVelaConfig(cfg MCPConfig) *VelaProxyConfig {
+	if cfg.Vela != nil {
+		return cfg.Vela
+	}
+	return detectVelaIntegration()
+}
+
+func defaultDetectVelaIntegration() *VelaProxyConfig {
+	path, err := exec.LookPath("vela")
+	if err != nil {
+		return nil
+	}
+	return &VelaProxyConfig{Command: path, Args: []string{"serve"}}
+}
+
+func registerVelaTools(srv *server.MCPServer, cfg VelaProxyConfig, allowlist map[string]bool) {
+	if shouldRegister("vela_query_graph", allowlist) {
+		srv.AddTool(
+			mcp.NewTool("vela_query_graph",
+				mcp.WithDescription("Search the local Vela graph for relevant nodes and structural context."),
+				mcp.WithReadOnlyHintAnnotation(true),
+				mcp.WithString("question", mcp.Required(), mcp.Description("Natural language query or graph search term")),
+				mcp.WithNumber("limit", mcp.Description("Maximum number of matching nodes to return (default: 5)")),
+			),
+			makeVelaForwardHandler(cfg, "vela_query_graph"),
+		)
+	}
+	if shouldRegister("vela_shortest_path", allowlist) {
+		srv.AddTool(
+			mcp.NewTool("vela_shortest_path",
+				mcp.WithDescription("Find the shortest path between two nodes in the Vela graph."),
+				mcp.WithReadOnlyHintAnnotation(true),
+				mcp.WithString("source", mcp.Required(), mcp.Description("Source node label or ID")),
+				mcp.WithString("target", mcp.Required(), mcp.Description("Target node label or ID")),
+			),
+			makeVelaForwardHandler(cfg, "vela_shortest_path"),
+		)
+	}
+	if shouldRegister("vela_get_node", allowlist) {
+		srv.AddTool(
+			mcp.NewTool("vela_get_node",
+				mcp.WithDescription("Resolve a node from the Vela graph by ID or label."),
+				mcp.WithReadOnlyHintAnnotation(true),
+				mcp.WithString("label", mcp.Required(), mcp.Description("Node ID or label")),
+			),
+			makeVelaForwardHandler(cfg, "vela_get_node"),
+		)
+	}
+	if shouldRegister("vela_get_neighbors", allowlist) {
+		srv.AddTool(
+			mcp.NewTool("vela_get_neighbors",
+				mcp.WithDescription("Return direct incoming and outgoing neighbors for a Vela graph node."),
+				mcp.WithReadOnlyHintAnnotation(true),
+				mcp.WithString("label", mcp.Required(), mcp.Description("Node ID or label")),
+			),
+			makeVelaForwardHandler(cfg, "vela_get_neighbors"),
+		)
+	}
+	if shouldRegister("vela_graph_stats", allowlist) {
+		srv.AddTool(
+			mcp.NewTool("vela_graph_stats",
+				mcp.WithDescription("Summarize graph size, node types, and confidence distribution from Vela."),
+				mcp.WithReadOnlyHintAnnotation(true),
+			),
+			makeVelaForwardHandler(cfg, "vela_graph_stats"),
+		)
+	}
+	if shouldRegister("vela_explain_graph", allowlist) {
+		srv.AddTool(
+			mcp.NewTool("vela_explain_graph",
+				mcp.WithDescription("Explain all edges involving a node in the Vela graph."),
+				mcp.WithReadOnlyHintAnnotation(true),
+				mcp.WithString("label", mcp.Required(), mcp.Description("Node label or ID")),
+			),
+			makeVelaForwardHandler(cfg, "vela_explain_graph"),
+		)
+	}
+	if shouldRegister("vela_federated_search", allowlist) {
+		srv.AddTool(
+			mcp.NewTool("vela_federated_search",
+				mcp.WithDescription("Search Vela's graph corpus, including any memory-derived nodes already present there."),
+				mcp.WithReadOnlyHintAnnotation(true),
+				mcp.WithString("query", mcp.Required(), mcp.Description("Search query")),
+				mcp.WithNumber("limit", mcp.Description("Maximum number of matching nodes to return (default: 5)")),
+			),
+			makeVelaForwardHandler(cfg, "vela_federated_search"),
+		)
+	}
+}
+
+func makeVelaForwardHandler(cfg VelaProxyConfig, toolName string) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		result, err := callVelaTool(ctx, cfg, toolName, req.GetArguments())
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return result, nil
+	}
+}
+
+func callVelaTool(ctx context.Context, cfg VelaProxyConfig, toolName string, args map[string]any) (*mcp.CallToolResult, error) {
+	proxyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	cli, err := newVelaProxyClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("vela unavailable: %w", err)
+	}
+	defer func() { _ = cli.Close() }()
+
+	_, err = cli.Initialize(proxyCtx, mcp.InitializeRequest{Params: mcp.InitializeParams{
+		ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
+		ClientInfo:      mcp.Implementation{Name: "ancora", Version: "0.1.0"},
+		Capabilities:    mcp.ClientCapabilities{},
+	}})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		return nil, fmt.Errorf("initialize vela MCP: %w", err)
+	}
+
+	request := mcp.CallToolRequest{}
+	request.Params.Name = toolName
+	request.Params.Arguments = args
+	result, err := cli.CallTool(proxyCtx, request)
+	if err != nil {
+		return nil, fmt.Errorf("call %s: %w", toolName, err)
+	}
+	return result, nil
 }
 
 // ─── Tool Handlers ───────────────────────────────────────────────────────────

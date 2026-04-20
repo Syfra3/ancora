@@ -12,6 +12,12 @@ import (
 
 func newMCPTestStore(t *testing.T) *store.Store {
 	t.Helper()
+	oldDetectVela := detectVelaIntegration
+	detectVelaIntegration = func() *VelaProxyConfig { return nil }
+	t.Cleanup(func() {
+		detectVelaIntegration = oldDetectVela
+	})
+
 	cfg, err := store.DefaultConfig()
 	if err != nil {
 		t.Fatalf("DefaultConfig: %v", err)
@@ -45,6 +51,89 @@ func TestNewServerRegistersTools(t *testing.T) {
 	srv := NewServer(s)
 	if srv == nil {
 		t.Fatalf("expected MCP server instance")
+	}
+}
+
+type fakeVelaClient struct {
+	result *mcppkg.CallToolResult
+	err    error
+	tool   string
+	args   map[string]any
+}
+
+func (f *fakeVelaClient) Initialize(context.Context, mcppkg.InitializeRequest) (*mcppkg.InitializeResult, error) {
+	return &mcppkg.InitializeResult{}, nil
+}
+
+func (f *fakeVelaClient) CallTool(_ context.Context, req mcppkg.CallToolRequest) (*mcppkg.CallToolResult, error) {
+	f.tool = req.Params.Name
+	f.args = req.GetArguments()
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.result, nil
+}
+
+func (f *fakeVelaClient) Close() error { return nil }
+
+func TestNewServerWithVelaRegistersForwardedTools(t *testing.T) {
+	s := newMCPTestStore(t)
+	oldDetect := detectVelaIntegration
+	detectVelaIntegration = func() *VelaProxyConfig {
+		return &VelaProxyConfig{Command: "vela", Args: []string{"serve"}}
+	}
+	defer func() { detectVelaIntegration = oldDetect }()
+
+	srv := NewServer(s)
+	tools := srv.ListTools()
+	for _, name := range []string{"vela_query_graph", "vela_shortest_path", "vela_get_node", "vela_get_neighbors", "vela_graph_stats", "vela_explain_graph", "vela_federated_search"} {
+		if tools[name] == nil {
+			t.Fatalf("expected forwarded tool %q to be registered", name)
+		}
+	}
+}
+
+func TestVelaForwardHandlerProxiesCall(t *testing.T) {
+	oldClient := newVelaProxyClient
+	defer func() { newVelaProxyClient = oldClient }()
+	cli := &fakeVelaClient{result: mcppkg.NewToolResultText("vela ok")}
+	newVelaProxyClient = func(cfg VelaProxyConfig) (velaMCPClient, error) {
+		if cfg.Command != "vela" {
+			t.Fatalf("expected vela command, got %q", cfg.Command)
+		}
+		return cli, nil
+	}
+
+	h := makeVelaForwardHandler(VelaProxyConfig{Command: "vela", Args: []string{"serve"}}, "vela_query_graph")
+	res, err := h(context.Background(), mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{"question": "auth flow"}}})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if cli.tool != "vela_query_graph" {
+		t.Fatalf("expected tool vela_query_graph, got %q", cli.tool)
+	}
+	if cli.args["question"] != "auth flow" {
+		t.Fatalf("expected forwarded args, got %#v", cli.args)
+	}
+	if got := callResultText(t, res); !strings.Contains(got, "vela ok") {
+		t.Fatalf("expected vela result, got %q", got)
+	}
+}
+
+func TestVelaForwardHandlerReturnsToolError(t *testing.T) {
+	oldClient := newVelaProxyClient
+	defer func() { newVelaProxyClient = oldClient }()
+	newVelaProxyClient = func(VelaProxyConfig) (velaMCPClient, error) {
+		return nil, errors.New("missing vela")
+	}
+
+	h := makeVelaForwardHandler(VelaProxyConfig{Command: "vela", Args: []string{"serve"}}, "vela_query_graph")
+	res, err := h(context.Background(), mcppkg.CallToolRequest{})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected tool error result")
 	}
 }
 
@@ -929,6 +1018,9 @@ func TestResolveToolsAgentProfile(t *testing.T) {
 		"start", "end", "get",
 		"suggest_topic", "capture", "save_prompt",
 		"update", // skills explicitly say "use ancora_update when you have an exact ID to correct"
+		"vela_query_graph", "vela_shortest_path", "vela_get_node",
+		"vela_get_neighbors", "vela_graph_stats", "vela_explain_graph",
+		"vela_federated_search",
 	}
 	for _, tool := range expectedTools {
 		if !result[tool] {
@@ -973,12 +1065,15 @@ func TestResolveToolsCombinedProfiles(t *testing.T) {
 		t.Fatal("expected non-nil allowlist for combined profiles")
 	}
 
-	// Should have all 15 tools
+	// Should have all memory + forwarded graph tools
 	allTools := []string{
 		"save", "search", "context", "summarize",
 		"start", "end", "get",
 		"suggest_topic", "capture", "save_prompt",
 		"update", "delete", "stats", "timeline", "merge",
+		"vela_query_graph", "vela_shortest_path", "vela_get_node",
+		"vela_get_neighbors", "vela_graph_stats", "vela_explain_graph",
+		"vela_federated_search",
 	}
 	for _, tool := range allTools {
 		if !result[tool] {
@@ -1202,14 +1297,14 @@ func TestNewServerBackwardsCompatible(t *testing.T) {
 	srv := NewServer(s)
 	tools := srv.ListTools()
 
-	// 11 agent + 4 admin = 15 total
+	// Tests disable live Vela detection, so the default server still exposes memory tools only.
 	if len(tools) != 15 {
-		t.Errorf("NewServer should register all 15 tools, got %d", len(tools))
+		t.Errorf("NewServer should register all 15 memory tools when Vela is disabled in tests, got %d", len(tools))
 	}
 }
 
 func TestProfileConsistency(t *testing.T) {
-	// Verify that agent + admin = all 15 tools
+	// Verify that agent + admin covers memory + forwarded graph tool names.
 	combined := make(map[string]bool)
 	for tool := range ProfileAgent {
 		combined[tool] = true
@@ -1218,8 +1313,8 @@ func TestProfileConsistency(t *testing.T) {
 		combined[tool] = true
 	}
 
-	if len(combined) != 15 {
-		t.Errorf("agent + admin should cover all 15 tools, got %d", len(combined))
+	if len(combined) != 22 {
+		t.Errorf("agent + admin should cover all 22 tools, got %d", len(combined))
 	}
 
 	// Verify no overlap between profiles

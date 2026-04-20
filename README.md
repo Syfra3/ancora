@@ -44,6 +44,41 @@ Want your memories synced across all your devices?
 
 ### Installation
 
+### What Ancora is for
+
+Ancora is the **long-term memory** layer.
+
+Use Ancora when you want to:
+- save decisions, bugs, discoveries, and session summaries
+- recover memory across sessions
+- expose memory tools to Claude Code or OpenCode
+
+If you also want graph extraction and graph retrieval, install **Vela** too.
+
+### Choose your setup first
+
+#### 1. Ancora only
+
+Use this if you only want memory.
+
+- You install `ancora`
+- You run `ancora setup ...`
+- Your MCP tools are `ancora_*`
+
+#### 2. Ancora + Vela
+
+Use this if you want memory **and** graph retrieval.
+
+- Ancora stays the main MCP surface
+- Vela adds `vela_*` graph tools behind Ancora
+- memory writes still belong to Ancora
+
+#### 3. Vela only
+
+If you do **not** want memory, skip Ancora and install Vela instead.
+
+That setup is documented in the Vela README.
+
 #### Recommended: Homebrew (macOS/Linux)
 
 ```bash
@@ -140,6 +175,20 @@ Configure in your AI agent's MCP settings:
 
 ### Setup Agent Integration
 
+For most users, this is the command you want:
+
+```bash
+ancora setup
+```
+
+That opens the interactive installer.
+
+If Vela is already installed, Ancora will detect it and your install mode becomes:
+- `ancora+vela`
+
+If Vela is not installed, your install mode becomes:
+- `ancora-only`
+
 **Automated setup (recommended):**
 
 ```bash
@@ -155,6 +204,39 @@ ancora setup opencode     # Auto-install for OpenCode
 
 - **Claude Code**: Plugin via marketplace (GitHub), MCP config, SessionStart hooks, compaction recovery, session tracking
 - **OpenCode**: Plugin at `~/.config/opencode/plugins/ancora.ts`, MCP registration, session hooks
+
+**What changes when Vela is also installed:**
+
+- Ancora still owns memory tools
+- Ancora exposes forwarded `vela_*` graph tools
+- the user keeps one primary MCP surface instead of choosing between two memory systems
+
+### For dummies: recommended paths
+
+#### I just want memory
+
+```bash
+brew install ancora
+ancora setup
+```
+
+#### I want memory and graph retrieval together
+
+```bash
+brew install ancora
+
+# Install Vela too
+# follow the Vela README install steps
+
+ancora setup
+```
+
+If `vela` is in your PATH, Ancora will detect it automatically.
+
+#### I only want graph retrieval, not memory
+
+Do not install Ancora.
+Install Vela and use `vela serve`.
 
 **Local development setup for Claude Code:**
 

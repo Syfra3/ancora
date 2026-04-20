@@ -1432,8 +1432,8 @@ func TestValidateBinaryInPATH(t *testing.T) {
 	t.Run("binary found in PATH returns path", func(t *testing.T) {
 		resetSetupSeams(t)
 		lookPathFn = func(name string) (string, error) {
-			if name == "syfra" {
-				return "/usr/local/bin/syfra", nil
+			if name == "ancora" {
+				return "/usr/local/bin/ancora", nil
 			}
 			return "", fmt.Errorf("not found")
 		}
@@ -1441,8 +1441,8 @@ func TestValidateBinaryInPATH(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected success, got: %v", err)
 		}
-		if path != "/usr/local/bin/syfra" {
-			t.Errorf("expected /usr/local/bin/syfra, got %q", path)
+		if path != "/usr/local/bin/ancora" {
+			t.Errorf("expected /usr/local/bin/ancora, got %q", path)
 		}
 	})
 
@@ -1470,6 +1470,7 @@ func TestInstallRoutesForOpenCodeAndClaude(t *testing.T) {
 		home := useTestHome(t)
 		runtimeGOOS = "linux"
 		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+		lookPathFn = func(string) (string, error) { return "", errors.New("not found") }
 
 		result, err := Install("opencode")
 		if err != nil {
@@ -1478,12 +1479,20 @@ func TestInstallRoutesForOpenCodeAndClaude(t *testing.T) {
 		if result.Agent != "opencode" {
 			t.Fatalf("expected opencode result, got %#v", result)
 		}
+		if result.Mode != ModeAncoraOnly {
+			t.Fatalf("expected ancora-only mode, got %q", result.Mode)
+		}
 	})
 
 	t.Run("claude-code route", func(t *testing.T) {
 		resetSetupSeams(t)
 		useTestHome(t)
-		lookPathFn = func(string) (string, error) { return "claude", nil }
+		lookPathFn = func(name string) (string, error) {
+			if name == "claude" {
+				return "claude", nil
+			}
+			return "", errors.New("not found")
+		}
 		runCommand = func(string, ...string) ([]byte, error) { return []byte("ok"), nil }
 		writeClaudeCodeUserMCPFn = func() error { return nil }
 
@@ -1493,6 +1502,57 @@ func TestInstallRoutesForOpenCodeAndClaude(t *testing.T) {
 		}
 		if result.Agent != "claude-code" {
 			t.Fatalf("expected claude-code result, got %#v", result)
+		}
+		if result.Mode != ModeAncoraOnly {
+			t.Fatalf("expected ancora-only mode, got %q", result.Mode)
+		}
+	})
+}
+
+func TestInstallDetectsCombinedModeWhenVelaIsPresent(t *testing.T) {
+	t.Run("opencode combined mode", func(t *testing.T) {
+		resetSetupSeams(t)
+		home := useTestHome(t)
+		runtimeGOOS = "linux"
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+		lookPathFn = func(name string) (string, error) {
+			if name == "vela" {
+				return "/usr/local/bin/vela", nil
+			}
+			return "", errors.New("not found")
+		}
+
+		result, err := Install("opencode")
+		if err != nil {
+			t.Fatalf("Install(opencode) failed: %v", err)
+		}
+		if result.Mode != ModeAncoraVela {
+			t.Fatalf("expected ancora+vela mode, got %q", result.Mode)
+		}
+	})
+
+	t.Run("claude-code combined mode", func(t *testing.T) {
+		resetSetupSeams(t)
+		useTestHome(t)
+		lookPathFn = func(name string) (string, error) {
+			switch name {
+			case "claude":
+				return "claude", nil
+			case "vela":
+				return "/usr/local/bin/vela", nil
+			default:
+				return "", errors.New("not found")
+			}
+		}
+		runCommand = func(string, ...string) ([]byte, error) { return []byte("ok"), nil }
+		writeClaudeCodeUserMCPFn = func() error { return nil }
+
+		result, err := Install("claude-code")
+		if err != nil {
+			t.Fatalf("Install(claude-code) failed: %v", err)
+		}
+		if result.Mode != ModeAncoraVela {
+			t.Fatalf("expected ancora+vela mode, got %q", result.Mode)
 		}
 	})
 }
