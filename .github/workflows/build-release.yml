@@ -1,0 +1,125 @@
+name: Build & Upload Release Binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v1.7.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            platform: linux-amd64
+          - goos: linux
+            goarch: arm64
+            platform: linux-arm64
+          - goos: darwin
+            goarch: amd64
+            platform: darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            platform: darwin-arm64
+          - goos: windows
+            goarch: amd64
+            platform: windows-amd64
+            ext: .exe
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          VERSION="${TAG#v}"
+          BINARY_NAME="ancora${{ matrix.ext }}"
+
+          go build \
+            -ldflags="-s -w -X main.version=${TAG}" \
+            -trimpath \
+            -o "${BINARY_NAME}" \
+            ./cmd/ancora
+
+          ARCHIVE_NAME="ancora-${VERSION}-${{ matrix.platform }}.tar.gz"
+          tar czf "${ARCHIVE_NAME}" "${BINARY_NAME}"
+
+          sha256sum "${ARCHIVE_NAME}" > "${ARCHIVE_NAME}.sha256"
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag }}
+          files: |
+            ancora-*.tar.gz
+            ancora-*.sha256
+
+  update-homebrew-tap:
+    needs: build-and-upload
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: Syfra3/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          REPO="Syfra3/ancora"
+          PACKAGE="ancora"
+          FORMULA="Formula/${PACKAGE}.rb"
+
+          declare -A CHECKSUMS
+          for platform in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64; do
+            URL="https://github.com/${REPO}/releases/download/v${VERSION}/${PACKAGE}-${VERSION}-${platform}.tar.gz.sha256"
+            SHA256=$(curl -sL "$URL" | awk '{print $1}')
+            if [ -z "$SHA256" ]; then
+              echo "ERROR: Could not fetch checksum for ${platform}"
+              exit 1
+            fi
+            CHECKSUMS[$platform]="$SHA256"
+            echo "${platform}: ${SHA256}"
+          done
+
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" "$FORMULA"
+          sed -i "/darwin-arm64\.tar\.gz\"/{n; s/sha256 \".*\"/sha256 \"${CHECKSUMS[darwin-arm64]}\"/}" "$FORMULA"
+          sed -i "/darwin-amd64\.tar\.gz\"/{n; s/sha256 \".*\"/sha256 \"${CHECKSUMS[darwin-amd64]}\"/}" "$FORMULA"
+          sed -i "/linux-arm64\.tar\.gz\"/{n; s/sha256 \".*\"/sha256 \"${CHECKSUMS[linux-arm64]}\"/}" "$FORMULA"
+          sed -i "/linux-amd64\.tar\.gz\"/{n; s/sha256 \".*\"/sha256 \"${CHECKSUMS[linux-amd64]}\"/}" "$FORMULA"
+
+      - name: Commit and push
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/ancora.rb
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "chore: update ancora to v${VERSION}"
+          git push
