@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/Syfra3/ancora/compare/v1.5.0...v1.6.0) (2026-04-20)
+
+
+### Features
+
+* **mcp:** forward vela graph tools through ancora ([#26](https://github.com/Syfra3/ancora/issues/26)) ([4695ced](https://github.com/Syfra3/ancora/commit/4695cedf089a3966557759a72cc0212d064802a1))
+
 ## [1.5.0](https://github.com/Syfra3/ancora/compare/v1.4.0...v1.5.0) (2026-04-18)
 
 
