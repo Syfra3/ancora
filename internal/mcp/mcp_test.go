@@ -98,8 +98,16 @@ func TestNewServerWithVelaRegistersForwardedTools(t *testing.T) {
 func TestDefaultDetectVelaIntegrationRespectsPersistedMode(t *testing.T) {
 	home := t.TempDir()
 	originalHome := os.Getenv("HOME")
+	oldLookPath := velaLookPath
 	os.Setenv("HOME", home)
 	defer os.Setenv("HOME", originalHome)
+	defer func() { velaLookPath = oldLookPath }()
+	velaLookPath = func(file string) (string, error) {
+		if file == "vela" {
+			return "/usr/local/bin/vela", nil
+		}
+		return "", errors.New("missing")
+	}
 
 	if err := setup.SaveIntegrationState(setup.IntegrationState{Mode: setup.ModeAncoraOnly}); err != nil {
 		t.Fatalf("SaveIntegrationState() error = %v", err)

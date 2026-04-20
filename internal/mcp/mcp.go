@@ -61,6 +61,7 @@ type velaMCPClient interface {
 var suggestTopicKey = store.SuggestTopicKey
 
 var detectVelaIntegration = defaultDetectVelaIntegration
+var velaLookPath = exec.LookPath
 
 var newVelaProxyClient = func(cfg VelaProxyConfig) (velaMCPClient, error) {
 	return mcpclient.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
@@ -701,7 +702,7 @@ func defaultDetectVelaIntegration() *VelaProxyConfig {
 			return nil
 		}
 	}
-	path, err := exec.LookPath("vela")
+	path, err := velaLookPath("vela")
 	if err != nil {
 		return nil
 	}
