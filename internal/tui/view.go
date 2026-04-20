@@ -870,6 +870,11 @@ func (m Model) viewSetup() string {
 			b.WriteString(fmt.Sprintf("%s %s\n\n",
 				detailLabelStyle.Render("Location:"),
 				projectStyle.Render(m.SetupResult.Destination)))
+			if m.SetupResult.Mode != "" {
+				b.WriteString(fmt.Sprintf("%s %s\n\n",
+					detailLabelStyle.Render("Mode:"),
+					projectStyle.Render(m.SetupResult.Mode)))
+			}
 
 			// Post-install instructions
 			switch m.SetupResult.Agent {
