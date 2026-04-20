@@ -17,6 +17,7 @@ type WizardState int
 
 const (
 	StateWelcome WizardState = iota
+	StateModeChoice
 	StateModelChoice
 	StateDownloading
 	StateLlamaCppCheck
@@ -41,6 +42,8 @@ type WizardModel struct {
 	installingLlama   bool
 	pluginChoice      string // "opencode", "claude-code", "skip"
 	pluginChoiceIndex int    // 0=opencode, 1=claude-code, 2=skip
+	integrationMode   string
+	modeChoiceIndex   int    // 0=ancora-only, 1=ancora+vela
 	menuChoiceIndex   int    // For main menu when integrated with TUI
 	version           string // Version string to display
 }
@@ -48,17 +51,19 @@ type WizardModel struct {
 // NewWizard creates a new setup wizard model.
 func NewWizard() WizardModel {
 	return WizardModel{
-		state:    StateWelcome,
-		progress: progress.New(progress.WithDefaultGradient()),
+		state:           StateWelcome,
+		progress:        progress.New(progress.WithDefaultGradient()),
+		integrationMode: ModeAncoraOnly,
 	}
 }
 
 // NewWizardWithVersion creates a new setup wizard model with version info.
 func NewWizardWithVersion(ver string) WizardModel {
 	return WizardModel{
-		state:    StateWelcome,
-		progress: progress.New(progress.WithDefaultGradient()),
-		version:  ver,
+		state:           StateWelcome,
+		progress:        progress.New(progress.WithDefaultGradient()),
+		integrationMode: ModeAncoraOnly,
+		version:         ver,
 	}
 }
 
@@ -108,6 +113,20 @@ func (m WizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter", " ":
 			switch m.state {
 			case StateWelcome:
+				m.state = StateModeChoice
+				return m, nil
+
+			case StateModeChoice:
+				if m.modeChoiceIndex == 0 {
+					m.integrationMode = ModeAncoraOnly
+				} else {
+					m.integrationMode = ModeAncoraVela
+				}
+				if err := SaveIntegrationState(IntegrationState{Mode: m.integrationMode, UpdatedBy: "ancora"}); err != nil {
+					m.err = err
+					m.state = StateError
+					return m, nil
+				}
 				m.state = StateModelChoice
 				return m, nil
 
@@ -156,6 +175,15 @@ func (m WizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "up", "down":
+			if m.state == StateModeChoice {
+				switch msg.String() {
+				case "up":
+					m.modeChoiceIndex = (m.modeChoiceIndex + 1) % 2
+				case "down":
+					m.modeChoiceIndex = (m.modeChoiceIndex + 1) % 2
+				}
+				return m, nil
+			}
 			if m.state == StatePluginChoice {
 				switch msg.String() {
 				case "up":
@@ -324,6 +352,8 @@ func (m WizardModel) View() string {
 	switch m.state {
 	case StateWelcome:
 		return m.viewWelcome()
+	case StateModeChoice:
+		return m.viewModeChoice()
 	case StateModelChoice:
 		return m.viewModelChoice()
 	case StateDownloading:
@@ -443,6 +473,30 @@ func (m WizardModel) viewModelChoice() string {
 	return b.String()
 }
 
+func (m WizardModel) viewModeChoice() string {
+	var b strings.Builder
+	items := []string{"Ancora only", "Ancora + Vela"}
+
+	var itemsStr strings.Builder
+	for i, item := range items {
+		if i == m.modeChoiceIndex {
+			itemsStr.WriteString("  ▶ " + item + "\n")
+		} else {
+			itemsStr.WriteString("    " + item + "\n")
+		}
+	}
+
+	content := titleStyle.Render("Integration Mode") + "\n\n" +
+		"Choose how Ancora should expose retrieval:\n\n" +
+		itemsStr.String() +
+		"Ancora only keeps memory tools only.\n" +
+		"Ancora + Vela forwards vela_* retrieval tools through Ancora MCP.\n\n" +
+		hintStyle.Render("[↑/↓ to select, Enter to confirm, q = quit]")
+
+	b.WriteString(boxStyle.Render(content))
+	return b.String()
+}
+
 func (m WizardModel) viewDownloading() string {
 	var b strings.Builder
 
@@ -533,6 +587,8 @@ func (m WizardModel) viewSuccess() string {
 	summary.WriteString(successStyle.Render("✓ Setup Complete") + "\n\n")
 
 	// Model status
+	summary.WriteString(fmt.Sprintf("✓ Integration mode: %s\n\n", m.integrationMode))
+
 	if m.downloaded > 0 {
 		destPath := filepath.Join(embed.ModelInstallPath(), embed.ModelFileName)
 		summary.WriteString("✓ Embedding model installed\n")
