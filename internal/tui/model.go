@@ -69,6 +69,11 @@ type recentObservationsMsg struct {
 	err          error
 }
 
+type observationDeletedMsg struct {
+	id  int64
+	err error
+}
+
 type observationDetailMsg struct {
 	observation *store.Observation
 	err         error
@@ -158,6 +163,9 @@ type Model struct {
 
 	// Recent observations
 	RecentObservations []store.Observation
+	RecentPrevScreen   Screen
+	RecentWorkspace    string
+	RecentVisibility   string
 
 	// Observation detail
 	SelectedObservation *store.Observation
@@ -307,9 +315,20 @@ func searchMemories(s *store.Store, query string) tea.Cmd {
 }
 
 func loadRecentObservations(s *store.Store) tea.Cmd {
+	return loadRecentObservationsWithFilter(s, "", "")
+}
+
+func loadRecentObservationsWithFilter(s *store.Store, workspace, visibility string) tea.Cmd {
 	return func() tea.Msg {
-		obs, err := s.AllObservations("", "", 50)
+		obs, err := s.AllObservations(workspace, visibility, 50)
 		return recentObservationsMsg{observations: obs, err: err}
+	}
+}
+
+func deleteObservation(s *store.Store, id int64) tea.Cmd {
+	return func() tea.Msg {
+		err := s.DeleteObservation(id, false)
+		return observationDeletedMsg{id: id, err: err}
 	}
 }
 

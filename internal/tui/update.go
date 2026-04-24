@@ -71,6 +71,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.RecentObservations = msg.observations
+		m.clampRecentViewport()
+		return m, nil
+
+	case observationDeletedMsg:
+		if msg.err != nil {
+			m.ErrorMsg = msg.err.Error()
+			return m, nil
+		}
+		if m.Screen == ScreenObservationDetail {
+			m.Screen = m.PrevScreen
+			m.SelectedObservation = nil
+			m.DetailScroll = 0
+			return m, m.refreshScreen(m.PrevScreen)
+		}
+		if m.Screen == ScreenRecent {
+			return m, loadRecentObservationsWithFilter(m.store, m.RecentWorkspace, m.RecentVisibility)
+		}
 		return m, nil
 
 	case observationDetailMsg:
@@ -366,8 +383,11 @@ func (m Model) handleDashboardSelection() (tea.Model, tea.Cmd) {
 	case "recent":
 		m.PrevScreen = ScreenDashboard
 		m.Screen = ScreenRecent
+		m.RecentPrevScreen = ScreenDashboard
 		m.Cursor = 0
 		m.Scroll = 0
+		m.RecentWorkspace = ""
+		m.RecentVisibility = ""
 		return m, loadRecentObservations(m.store)
 
 	case "sessions":
@@ -543,6 +563,11 @@ func (m Model) handleRecentKeys(key string) (tea.Model, tea.Cmd) {
 			m.PrevScreen = ScreenRecent
 			return m, loadObservationDetail(m.store, obsID)
 		}
+	case "d":
+		if len(m.RecentObservations) > 0 && m.Cursor < len(m.RecentObservations) {
+			obsID := m.RecentObservations[m.Cursor].ID
+			return m, deleteObservation(m.store, obsID)
+		}
 	case "t":
 		if len(m.RecentObservations) > 0 && m.Cursor < len(m.RecentObservations) {
 			obsID := m.RecentObservations[m.Cursor].ID
@@ -550,10 +575,12 @@ func (m Model) handleRecentKeys(key string) (tea.Model, tea.Cmd) {
 			return m, loadTimeline(m.store, obsID)
 		}
 	case "esc", "q":
-		m.Screen = ScreenDashboard
+		m.Screen = m.RecentPrevScreen
 		m.Cursor = 0
 		m.Scroll = 0
-		return m, loadStats(m.store)
+		m.RecentWorkspace = ""
+		m.RecentVisibility = ""
+		return m, m.refreshScreen(m.RecentPrevScreen)
 	}
 	return m, nil
 }
@@ -572,6 +599,10 @@ func (m Model) handleObservationDetailKeys(key string) (tea.Model, tea.Cmd) {
 		// View timeline for this observation
 		if m.SelectedObservation != nil {
 			return m, loadTimeline(m.store, m.SelectedObservation.ID)
+		}
+	case "d":
+		if m.SelectedObservation != nil {
+			return m, deleteObservation(m.store, m.SelectedObservation.ID)
 		}
 	case "m":
 		// Move observation - open move screen
@@ -744,13 +775,13 @@ func (m Model) handleProjectsKeys(key string) (tea.Model, tea.Cmd) {
 			selectedProject := m.Projects[m.Cursor].Name
 			m.PrevScreen = ScreenProjects
 			m.Screen = ScreenRecent
+			m.RecentPrevScreen = ScreenProjects
 			m.Cursor = 0
 			m.Scroll = 0
+			m.RecentWorkspace = selectedProject
+			m.RecentVisibility = m.ProjectScopeFilter
 			// Load observations for this project with current scope filter
-			return m, func() tea.Msg {
-				obs, err := m.store.AllObservations(selectedProject, m.ProjectScopeFilter, 50)
-				return recentObservationsMsg{observations: obs, err: err}
-			}
+			return m, loadRecentObservationsWithFilter(m.store, selectedProject, m.ProjectScopeFilter)
 		}
 	case "esc", "q":
 		m.Screen = ScreenDashboard
@@ -1024,11 +1055,50 @@ func (m Model) refreshScreen(screen Screen) tea.Cmd {
 	case ScreenDashboard:
 		return loadStats(m.store)
 	case ScreenRecent:
-		return loadRecentObservations(m.store)
+		return loadRecentObservationsWithFilter(m.store, m.RecentWorkspace, m.RecentVisibility)
 	case ScreenSessions:
 		return loadRecentSessions(m.store)
+	case ScreenProjects:
+		return loadProjectsWithStats(m.store)
 	default:
 		return nil
+	}
+}
+
+func (m *Model) clampRecentViewport() {
+	if len(m.RecentObservations) == 0 {
+		m.Cursor = 0
+		m.Scroll = 0
+		return
+	}
+
+	if m.Cursor >= len(m.RecentObservations) {
+		m.Cursor = len(m.RecentObservations) - 1
+	}
+	if m.Cursor < 0 {
+		m.Cursor = 0
+	}
+
+	visibleItems := (m.Height - 8) / 2
+	if visibleItems < 3 {
+		visibleItems = 3
+	}
+
+	maxScroll := len(m.RecentObservations) - visibleItems
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.Scroll > maxScroll {
+		m.Scroll = maxScroll
+	}
+	if m.Scroll < 0 {
+		m.Scroll = 0
+	}
+	if m.Cursor < m.Scroll {
+		m.Scroll = m.Cursor
+	}
+	if m.Cursor >= m.Scroll+visibleItems {
+		m.Scroll = m.Cursor - visibleItems + 1
 	}
 }
 

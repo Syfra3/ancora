@@ -269,6 +269,13 @@ func (m Model) viewRecent() string {
 
 	count := len(m.RecentObservations)
 	sectionTitle := fmt.Sprintf("Recent Observations — %d total", count)
+	if m.RecentWorkspace != "" {
+		sectionTitle = fmt.Sprintf("Recent Observations — %s", m.RecentWorkspace)
+		if m.RecentVisibility != "" {
+			sectionTitle += fmt.Sprintf(" (%s)", m.RecentVisibility)
+		}
+		sectionTitle += fmt.Sprintf(" — %d total", count)
+	}
 
 	// Header with section title
 	b.WriteString(m.renderHeader(sectionTitle))
@@ -300,7 +307,7 @@ func (m Model) viewRecent() string {
 			timestampStyle.Render(fmt.Sprintf("showing %d-%d of %d", m.Scroll+1, end, count))))
 	}
 
-	b.WriteString(renderFooter("j/k navigate • enter detail • t timeline • esc back"))
+	b.WriteString(renderFooter("j/k navigate • enter detail • t timeline • d delete • esc back"))
 
 	return b.String()
 }
@@ -403,7 +410,7 @@ func (m Model) viewObservationDetail() string {
 			timestampStyle.Render(fmt.Sprintf("line %d-%d of %d", m.DetailScroll+1, end, len(contentLines)))))
 	}
 
-	b.WriteString(renderFooter("j/k scroll • t timeline • m move • esc back"))
+	b.WriteString(renderFooter("j/k scroll • t timeline • d delete • m move • esc back"))
 
 	return b.String()
 }

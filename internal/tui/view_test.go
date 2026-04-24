@@ -338,6 +338,30 @@ func TestViewDashboardSearchAndRecent(t *testing.T) {
 	}
 }
 
+func TestViewRecentAndDetailShowDeleteHelp(t *testing.T) {
+	m := New(nil, "")
+	m.Screen = ScreenRecent
+	m.Height = 14
+	m.RecentWorkspace = "ancora"
+	m.RecentVisibility = "project"
+	m.RecentObservations = []store.Observation{{ID: 1, Type: "bugfix", Title: "one", Content: "content", CreatedAt: "2026-01-01"}}
+
+	out := m.viewRecent()
+	if !strings.Contains(out, "Recent Observations — ancora (project)") {
+		t.Fatal("recent view should show active filter context")
+	}
+	if !strings.Contains(out, "d delete") {
+		t.Fatal("recent footer should show delete shortcut")
+	}
+
+	m.Screen = ScreenObservationDetail
+	m.SelectedObservation = &store.Observation{ID: 1, Type: "bugfix", Title: "one", Content: "full content", SessionID: "s1", CreatedAt: "2026-01-01"}
+	out = m.viewObservationDetail()
+	if !strings.Contains(out, "d delete") {
+		t.Fatal("detail footer should show delete shortcut")
+	}
+}
+
 func TestViewObservationDetailTimelineSessionsAndSessionDetail(t *testing.T) {
 	m := New(nil, "")
 	m.Height = 22

@@ -228,6 +228,7 @@ func TestHandleRecentTimelineSessionsAndDetailKeyPaths(t *testing.T) {
 	m := New(fx.store, "")
 	m.Height = 14
 	m.Screen = ScreenRecent
+	m.PrevScreen = ScreenDashboard
 	m.RecentObservations = []store.Observation{{ID: fx.obsID}, {ID: fx.secondObs}, {ID: 33}, {ID: 44}}
 	m.Cursor = 2
 
@@ -315,6 +316,113 @@ func TestHandleRecentTimelineSessionsAndDetailKeyPaths(t *testing.T) {
 	}
 }
 
+func TestRecentDeleteRefreshesFilteredListAndClampsCursor(t *testing.T) {
+	fx := newTestFixture(t)
+	m := New(fx.store, "")
+	m.Screen = ScreenRecent
+	m.PrevScreen = ScreenProjects
+	m.RecentWorkspace = "ancora"
+	m.RecentVisibility = "project"
+	m.RecentObservations = []store.Observation{{ID: fx.obsID}, {ID: fx.secondObs}}
+	m.Cursor = 1
+	m.Scroll = 1
+	m.Height = 14
+
+	updatedModel, cmd := m.handleRecentKeys("d")
+	updated := updatedModel.(Model)
+	if cmd == nil {
+		t.Fatal("recent delete should return command")
+	}
+
+	msg := cmd()
+	deleteMsg, ok := msg.(observationDeletedMsg)
+	if !ok {
+		t.Fatalf("message type = %T", msg)
+	}
+	if deleteMsg.err != nil {
+		t.Fatalf("unexpected delete error: %v", deleteMsg.err)
+	}
+
+	updatedModel, refreshCmd := updated.Update(deleteMsg)
+	updated = updatedModel.(Model)
+	if refreshCmd == nil {
+		t.Fatal("delete result should refresh recent list")
+	}
+
+	refreshMsg := refreshCmd()
+	recentMsg, ok := refreshMsg.(recentObservationsMsg)
+	if !ok {
+		t.Fatalf("message type = %T", refreshMsg)
+	}
+
+	updatedModel, _ = updated.Update(recentMsg)
+	updated = updatedModel.(Model)
+	if len(updated.RecentObservations) != 1 {
+		t.Fatalf("observations = %d, want 1", len(updated.RecentObservations))
+	}
+	if updated.RecentObservations[0].ID != fx.obsID {
+		t.Fatalf("remaining observation = %d, want %d", updated.RecentObservations[0].ID, fx.obsID)
+	}
+	if updated.Cursor != 0 || updated.Scroll != 0 {
+		t.Fatalf("cursor/scroll = %d/%d, want 0/0", updated.Cursor, updated.Scroll)
+	}
+
+	if _, err := fx.store.GetObservation(fx.secondObs); err == nil {
+		t.Fatal("deleted observation should not be returned by GetObservation")
+	}
+	remaining, err := fx.store.GetObservation(fx.obsID)
+	if err != nil || remaining == nil {
+		t.Fatalf("remaining observation missing: %v", err)
+	}
+}
+
+func TestObservationDetailDeleteReturnsToPreviousScreen(t *testing.T) {
+	fx := newTestFixture(t)
+	m := New(fx.store, "")
+	m.Screen = ScreenObservationDetail
+	m.PrevScreen = ScreenRecent
+	m.RecentWorkspace = "ancora"
+	m.RecentVisibility = "project"
+	m.SelectedObservation = &store.Observation{ID: fx.secondObs}
+	m.DetailScroll = 4
+
+	updatedModel, cmd := m.handleObservationDetailKeys("d")
+	updated := updatedModel.(Model)
+	if cmd == nil {
+		t.Fatal("detail delete should return command")
+	}
+
+	msg := cmd()
+	deleteMsg, ok := msg.(observationDeletedMsg)
+	if !ok {
+		t.Fatalf("message type = %T", msg)
+	}
+
+	updatedModel, refreshCmd := updated.Update(deleteMsg)
+	updated = updatedModel.(Model)
+	if updated.Screen != ScreenRecent {
+		t.Fatalf("screen = %v, want %v", updated.Screen, ScreenRecent)
+	}
+	if updated.SelectedObservation != nil {
+		t.Fatal("selected observation should be cleared after delete")
+	}
+	if updated.DetailScroll != 0 {
+		t.Fatalf("detail scroll = %d, want 0", updated.DetailScroll)
+	}
+	if refreshCmd == nil {
+		t.Fatal("detail delete should refresh previous screen")
+	}
+
+	refreshMsg := refreshCmd()
+	recentMsg, ok := refreshMsg.(recentObservationsMsg)
+	if !ok {
+		t.Fatalf("message type = %T", refreshMsg)
+	}
+	if len(recentMsg.observations) != 1 || recentMsg.observations[0].ID != fx.obsID {
+		t.Fatalf("unexpected refreshed observations: %+v", recentMsg.observations)
+	}
+}
+
 func TestRefreshScreen(t *testing.T) {
 	m := New(newTestFixture(t).store, "")
 
@@ -326,6 +434,9 @@ func TestRefreshScreen(t *testing.T) {
 	}
 	if cmd := m.refreshScreen(ScreenSessions); cmd == nil {
 		t.Fatal("sessions refresh should return sessions command")
+	}
+	if cmd := m.refreshScreen(ScreenProjects); cmd == nil {
+		t.Fatal("projects refresh should return projects command")
 	}
 	if cmd := m.refreshScreen(ScreenSearch); cmd != nil {
 		t.Fatal("search refresh should not return command")
@@ -805,6 +916,9 @@ func TestHandleProjectsKeysWithMoveFeature(t *testing.T) {
 	updated = updatedModel.(Model)
 	if updated.Screen != ScreenRecent {
 		t.Fatal("enter should switch to recent observations")
+	}
+	if updated.RecentWorkspace != "ancora" {
+		t.Fatalf("recent workspace = %q, want ancora", updated.RecentWorkspace)
 	}
 	if cmd == nil {
 		t.Fatal("enter should load observations for project")
