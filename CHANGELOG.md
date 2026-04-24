@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.0](https://github.com/Syfra3/ancora/compare/v1.9.0...v1.10.0) (2026-04-24)
+
+
+### Features
+
+* allow deleting observations from TUI views ([764adb0](https://github.com/Syfra3/ancora/commit/764adb05a9da81f0888c654c16b4b09c4e573d7a))
+
 ## [1.9.0](https://github.com/Syfra3/ancora/compare/v1.8.0...v1.9.0) (2026-04-20)
 
 
