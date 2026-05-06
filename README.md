@@ -233,6 +233,15 @@ ancora setup
 
 If `vela` is in your PATH, Ancora will detect it automatically.
 
+Example Vela graph queries:
+
+```bash
+vela search --graph "./examples/wallet-service/.vela/graph.json" "explain Transaction"
+vela search --graph "./examples/wallet-service/.vela/graph.json" "who uses Transaction"
+vela search --graph "./examples/api-service/.vela/graph.json" "impact of OrderStatusDto"
+vela search --graph "./examples/mobile-app/.vela/graph.json" "who uses OrderListScreen"
+```
+
 #### I only want graph retrieval, not memory
 
 Do not install Ancora.
