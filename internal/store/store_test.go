@@ -38,6 +38,43 @@ func newTestStore(t *testing.T) *Store {
 	return s
 }
 
+func TestNewAppliesPragmasToPooledConnections(t *testing.T) {
+	cfg := mustDefaultConfig(t)
+	cfg.DataDir = t.TempDir()
+
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.Close()
+	})
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		t.Fatalf("begin pinned tx: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = tx.Rollback()
+	})
+
+	var timeout int
+	if err := s.db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatalf("query busy_timeout on pooled connection: %v", err)
+	}
+	if timeout != 5000 {
+		t.Fatalf("busy_timeout = %d, want 5000", timeout)
+	}
+
+	var foreignKeys int
+	if err := s.db.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
+		t.Fatalf("query foreign_keys on pooled connection: %v", err)
+	}
+	if foreignKeys != 1 {
+		t.Fatalf("foreign_keys = %d, want 1", foreignKeys)
+	}
+}
+
 type fakeRows struct {
 	next    []bool
 	scanErr error

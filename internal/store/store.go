@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -434,7 +435,7 @@ func New(cfg Config) (*Store, error) {
 	}
 
 	dbPath := filepath.Join(cfg.DataDir, "ancora.db")
-	db, err := openDB("sqlite", dbPath)
+	db, err := openDB("sqlite", sqliteDSN(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("ancora: open database: %w", err)
 	}
@@ -461,6 +462,17 @@ func New(cfg Config) (*Store, error) {
 	}
 
 	return s, nil
+}
+
+func sqliteDSN(path string) string {
+	u := url.URL{Scheme: "file", Path: path}
+	q := u.Query()
+	q.Add("_pragma", "busy_timeout(5000)")
+	q.Add("_pragma", "journal_mode(WAL)")
+	q.Add("_pragma", "synchronous(NORMAL)")
+	q.Add("_pragma", "foreign_keys(ON)")
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func (s *Store) Close() error {
