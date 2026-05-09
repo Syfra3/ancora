@@ -81,7 +81,7 @@ Drag and drop these files from `dist/` folder:
 After the release is published, run:
 
 ```bash
-cd ~/Documents/personal/syfra/homebrew-tap
+cd ../homebrew-tap
 ./update-formula.sh 1.0.0
 git add Formula/ancora.rb
 git commit -m "chore: update ancora formula to v1.0.0 with SHA256 checksums"
