@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.1](https://github.com/Syfra3/ancora/compare/v1.10.0...v1.10.1) (2026-05-09)
+
+
+### Bug Fixes
+
+* **store:** configure sqlite pragmas per connection ([#35](https://github.com/Syfra3/ancora/issues/35)) ([6c40fe2](https://github.com/Syfra3/ancora/commit/6c40fe2e1df7e10b6050d6e06a46eff527932b89))
+
 ## [1.10.0](https://github.com/Syfra3/ancora/compare/v1.9.0...v1.10.0) (2026-04-24)
 
 
