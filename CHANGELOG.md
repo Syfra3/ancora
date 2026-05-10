@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.3](https://github.com/Syfra3/ancora/compare/v1.10.2...v1.10.3) (2026-05-10)
+
+
+### Bug Fixes
+
+* **search:** fall back when query embedding times out ([#41](https://github.com/Syfra3/ancora/issues/41)) ([14c775c](https://github.com/Syfra3/ancora/commit/14c775caf3e861688adbe47e72ec59c85977c83d))
+
 ## [1.10.2](https://github.com/Syfra3/ancora/compare/v1.10.1...v1.10.2) (2026-05-10)
 
 
