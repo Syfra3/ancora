@@ -19,6 +19,7 @@ package embed
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,12 +28,13 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 var (
 	osStatEmbed  = os.Stat
 	execLookPath = exec.LookPath
-	execCommand  = exec.Command
+	execCommand  = exec.CommandContext
 )
 
 // ErrModelNotFound is returned when the GGUF model file does not exist.
@@ -58,7 +60,10 @@ type Embedder interface {
 type NomicEmbedder struct {
 	ModelPath string // Path to the .gguf model file
 	CLIPath   string // Path to llama-embedding binary (resolved at creation time)
+	Timeout   time.Duration
 }
+
+const defaultEmbedTimeout = 10 * time.Second
 
 // New creates a NomicEmbedder, resolving model path and CLI binary.
 // Returns ErrModelNotFound if the model does not exist.
@@ -80,22 +85,45 @@ func New() (*NomicEmbedder, error) {
 
 // Embed generates a 768-dim float32 embedding for text.
 func (e *NomicEmbedder) Embed(text string) ([]float32, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), e.timeout())
+	defer cancel()
+	return e.EmbedContext(ctx, text)
+}
+
+// EmbedContext generates an embedding and terminates the llama.cpp subprocess
+// if the caller cancels or the configured timeout expires.
+func (e *NomicEmbedder) EmbedContext(ctx context.Context, text string) ([]float32, error) {
 	if _, err := osStatEmbed(e.ModelPath); os.IsNotExist(err) {
 		return nil, ErrModelNotFound
 	}
 
 	// llama-embedding outputs JSON lines: {"embedding": [...]}
-	cmd := execCommand(e.CLIPath, embedCommandArgs(e.CLIPath, e.ModelPath, text)...)
+	cmd := execCommand(ctx, e.CLIPath, embedCommandArgs(e.CLIPath, e.ModelPath, text)...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("ancora: llama-embedding timed out after %s: %w", e.timeout(), ctxErr)
+		}
 		return nil, fmt.Errorf("ancora: llama-embedding failed: %w (stderr: %s)", err, stderr.String())
 	}
 
 	return parseEmbeddingOutput(stdout.Bytes())
+}
+
+func (e *NomicEmbedder) timeout() time.Duration {
+	if e.Timeout > 0 {
+		return e.Timeout
+	}
+	if raw := strings.TrimSpace(os.Getenv("ANCORA_EMBED_TIMEOUT")); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultEmbedTimeout
 }
 
 // ModelInstallPath returns the default directory where the model should be placed.
