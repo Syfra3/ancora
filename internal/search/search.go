@@ -18,6 +18,7 @@ package search
 
 import (
 	"strings"
+	"time"
 
 	"github.com/Syfra3/ancora/internal/store"
 )
@@ -26,6 +27,8 @@ const (
 	// RRFk is the standard dampening constant for Reciprocal Rank Fusion.
 	RRFk = 60
 )
+
+var queryEmbedTimeout = 10 * time.Second
 
 // Mode describes which search backends contributed to the results.
 type Mode string
@@ -63,12 +66,7 @@ func SearchWithOptions(query string, opts store.SearchOptions, embedder Embedder
 		return nil, ModeKeyword, err
 	}
 
-	var queryVec []float32
-	if embedder != nil {
-		if vec, err := embedder.Embed(query); err == nil {
-			queryVec = vec
-		}
-	}
+	queryVec := embedQuery(embedder, query)
 
 	var semResults []store.SearchResult
 	if queryVec != nil {
@@ -97,6 +95,35 @@ func SearchWithOptions(query string, opts store.SearchOptions, embedder Embedder
 		return out, ModeSemantic, nil
 	default:
 		return rrf(kwResults, semResults, limit), ModeHybrid, nil
+	}
+}
+
+func embedQuery(embedder Embedder, query string) []float32 {
+	if embedder == nil {
+		return nil
+	}
+
+	type result struct {
+		vec []float32
+		err error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		vec, err := embedder.Embed(query)
+		resultCh <- result{vec: vec, err: err}
+	}()
+
+	timer := time.NewTimer(queryEmbedTimeout)
+	defer timer.Stop()
+
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			return nil
+		}
+		return result.vec
+	case <-timer.C:
+		return nil
 	}
 }
 

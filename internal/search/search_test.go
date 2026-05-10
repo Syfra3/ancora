@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/Syfra3/ancora/internal/store"
 )
@@ -17,6 +18,16 @@ func (s stubEmbedder) Embed(_ string) ([]float32, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
+	return s.vec, nil
+}
+
+type slowEmbedder struct {
+	delay time.Duration
+	vec   []float32
+}
+
+func (s slowEmbedder) Embed(_ string) ([]float32, error) {
+	time.Sleep(s.delay)
 	return s.vec, nil
 }
 
@@ -220,6 +231,45 @@ func TestSearchWithOptionsHybridHonorsExplicitProjectFilter(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].Title != "Alpha semantic hit" {
 		t.Fatalf("expected explicit project filter to keep only alpha result, got %#v", results)
+	}
+}
+
+func TestSearchWithOptionsTimesOutSlowEmbedderAndFallsBackToKeyword(t *testing.T) {
+	s := newSearchTestStore(t)
+	if err := s.CreateSession("s-timeout", "ancora", ""); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := s.AddObservation(store.AddObservationParams{
+		SessionID:  "s-timeout",
+		Type:       "bugfix",
+		Title:      "MCP timeout regression",
+		Content:    "slow embedder should not block keyword search fallback",
+		Workspace:  "ancora",
+		Visibility: "work",
+	}); err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	oldTimeout := queryEmbedTimeout
+	queryEmbedTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { queryEmbedTimeout = oldTimeout })
+
+	started := time.Now()
+	results, mode, err := SearchWithOptions("slow embedder", store.SearchOptions{Workspace: "ancora", Limit: 10}, slowEmbedder{
+		delay: 200 * time.Millisecond,
+		vec:   []float32{0.1, 0.2},
+	}, s)
+	if err != nil {
+		t.Fatalf("SearchWithOptions: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed >= 100*time.Millisecond {
+		t.Fatalf("search waited for slow embedder: elapsed=%s", elapsed)
+	}
+	if mode != ModeKeyword {
+		t.Fatalf("expected keyword fallback after embed timeout, got %q", mode)
+	}
+	if len(results) != 1 || results[0].Title != "MCP timeout regression" {
+		t.Fatalf("expected keyword result after embed timeout, got %#v", results)
 	}
 }
 
