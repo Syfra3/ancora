@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.2](https://github.com/Syfra3/ancora/compare/v1.10.1...v1.10.2) (2026-05-10)
+
+
+### Bug Fixes
+
+* **embed:** bound embedding subprocess execution ([#38](https://github.com/Syfra3/ancora/issues/38)) ([49dbbbc](https://github.com/Syfra3/ancora/commit/49dbbbc3b461453ffa7ad2a6f1c86875164af23a))
+
 ## [1.10.1](https://github.com/Syfra3/ancora/compare/v1.10.0...v1.10.1) (2026-05-09)
 
 
