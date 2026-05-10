@@ -1,6 +1,7 @@
 package embed
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,14 +10,15 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
-func fakeEmbedCommand(t *testing.T, argLogPath, stdout, stderr string, exitCode int) func(string, ...string) *exec.Cmd {
+func fakeEmbedCommand(t *testing.T, argLogPath, stdout, stderr string, exitCode int) func(context.Context, string, ...string) *exec.Cmd {
 	t.Helper()
-	return func(name string, args ...string) *exec.Cmd {
+	return func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		cmdArgs := []string{"-test.run=TestEmbedHelperProcess", "--", name}
 		cmdArgs = append(cmdArgs, args...)
-		cmd := exec.Command(os.Args[0], cmdArgs...)
+		cmd := exec.CommandContext(ctx, os.Args[0], cmdArgs...)
 		cmd.Env = append(os.Environ(),
 			"GO_WANT_HELPER_PROCESS=1",
 			"HELPER_ARG_LOG="+argLogPath,
@@ -36,10 +38,31 @@ func TestEmbedHelperProcess(t *testing.T) {
 	if argLogPath := os.Getenv("HELPER_ARG_LOG"); argLogPath != "" {
 		_ = os.WriteFile(argLogPath, []byte(strings.Join(os.Args[3:], "\n")), 0644)
 	}
+	if sleep := os.Getenv("HELPER_SLEEP"); sleep != "" {
+		if d, err := time.ParseDuration(sleep); err == nil {
+			time.Sleep(d)
+		}
+	}
 	_, _ = fmt.Fprint(os.Stdout, os.Getenv("HELPER_STDOUT"))
 	_, _ = fmt.Fprint(os.Stderr, os.Getenv("HELPER_STDERR"))
 	code, _ := strconv.Atoi(os.Getenv("HELPER_EXIT_CODE"))
 	os.Exit(code)
+}
+
+func fakeSlowEmbedCommand(t *testing.T, argLogPath string, sleep time.Duration) func(context.Context, string, ...string) *exec.Cmd {
+	t.Helper()
+	return func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		cmdArgs := []string{"-test.run=TestEmbedHelperProcess", "--", name}
+		cmdArgs = append(cmdArgs, args...)
+		cmd := exec.CommandContext(ctx, os.Args[0], cmdArgs...)
+		cmd.Env = append(os.Environ(),
+			"GO_WANT_HELPER_PROCESS=1",
+			"HELPER_ARG_LOG="+argLogPath,
+			"HELPER_SLEEP="+sleep.String(),
+			"HELPER_EXIT_CODE=0",
+		)
+		return cmd
+	}
 }
 
 // TestMockEmbedder verifies the MockEmbedder satisfies the Embedder interface
@@ -285,6 +308,32 @@ func TestNomicEmbedderEmbedIncludesCLIStderrOnFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "boom on stderr") {
 		t.Fatalf("expected stderr in error, got %v", err)
+	}
+}
+
+func TestNomicEmbedderEmbedTimesOutHungCLI(t *testing.T) {
+	oldExecCommand := execCommand
+	oldStat := osStatEmbed
+	defer func() {
+		execCommand = oldExecCommand
+		osStatEmbed = oldStat
+	}()
+
+	modelPath := filepath.Join(t.TempDir(), "model.gguf")
+	if err := os.WriteFile(modelPath, []byte("fake model"), 0644); err != nil {
+		t.Fatalf("write model: %v", err)
+	}
+	osStatEmbed = os.Stat
+
+	execCommand = fakeSlowEmbedCommand(t, filepath.Join(t.TempDir(), "args.log"), 200*time.Millisecond)
+	embedder := &NomicEmbedder{ModelPath: modelPath, CLIPath: "/tmp/llama-embedding", Timeout: 10 * time.Millisecond}
+
+	_, err := embedder.Embed("semantic prompt")
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected timeout error, got %v", err)
 	}
 }
 
