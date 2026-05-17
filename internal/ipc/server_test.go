@@ -283,6 +283,33 @@ func TestServer_Emit_NoClients(t *testing.T) {
 	// If we reach here without panic, test passes.
 }
 
+func TestServer_Emit_DropsSlowClient(t *testing.T) {
+	srv, tr := newTestServer(t, "slowsecret")
+
+	_, _ = dialAndAuth(t, tr, "slowsecret")
+	waitClientCount(t, srv, 1)
+
+	payload, _ := MarshalPayload(ObservationPayload{ID: 1, Visibility: "work"})
+	start := time.Now()
+	srv.Emit(Event{
+		Type:      EventObservationCreated,
+		Timestamp: time.Now().UTC(),
+		Payload:   payload,
+	})
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("Emit blocked too long for slow client: %s", elapsed)
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if srv.ClientCount() == 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("slow client was not removed (ClientCount=%d)", srv.ClientCount())
+}
+
 // ─── ClientCount ──────────────────────────────────────────────────────────────
 
 func TestServer_ClientCount_TracksConnects(t *testing.T) {

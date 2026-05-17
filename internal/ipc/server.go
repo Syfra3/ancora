@@ -13,10 +13,11 @@ import (
 
 // Auth protocol constants.
 const (
-	authPrefix  = "AUTH "
-	authOK      = "OK\n"
-	authErr     = "ERR unauthorized\n"
-	authTimeout = 5 * time.Second
+	authPrefix       = "AUTH "
+	authOK           = "OK\n"
+	authErr          = "ERR unauthorized\n"
+	authTimeout      = 5 * time.Second
+	emitWriteTimeout = 250 * time.Millisecond
 )
 
 // Server listens on a Transport, authenticates clients via shared secret,
@@ -107,12 +108,19 @@ func (s *Server) Emit(e Event) {
 	var dead []*serverConn
 	for _, sc := range clients {
 		sc.mu.Lock()
+		if err := sc.conn.SetWriteDeadline(time.Now().Add(emitWriteTimeout)); err != nil {
+			dead = append(dead, sc)
+			sc.mu.Unlock()
+			continue
+		}
 		if _, err := sc.writer.Write(wire); err != nil {
 			dead = append(dead, sc)
 			sc.mu.Unlock()
 			continue
 		}
 		if err := sc.writer.Flush(); err != nil {
+			dead = append(dead, sc)
+		} else if err := sc.conn.SetWriteDeadline(time.Time{}); err != nil {
 			dead = append(dead, sc)
 		}
 		sc.mu.Unlock()
@@ -150,12 +158,19 @@ func (s *Server) emitExcept(e Event, exclude *serverConn) {
 	var dead []*serverConn
 	for _, sc := range clients {
 		sc.mu.Lock()
+		if err := sc.conn.SetWriteDeadline(time.Now().Add(emitWriteTimeout)); err != nil {
+			dead = append(dead, sc)
+			sc.mu.Unlock()
+			continue
+		}
 		if _, err := sc.writer.Write(wire); err != nil {
 			dead = append(dead, sc)
 			sc.mu.Unlock()
 			continue
 		}
 		if err := sc.writer.Flush(); err != nil {
+			dead = append(dead, sc)
+		} else if err := sc.conn.SetWriteDeadline(time.Time{}); err != nil {
 			dead = append(dead, sc)
 		}
 		sc.mu.Unlock()

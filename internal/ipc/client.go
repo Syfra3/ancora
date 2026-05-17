@@ -79,12 +79,20 @@ func (c *Client) Emit(e Event) {
 		return
 	}
 
+	if err := c.conn.SetWriteDeadline(time.Now().Add(emitWriteTimeout)); err != nil {
+		log.Printf("[ipc] client: set write deadline for event %s: %v", e.Type, err)
+		return
+	}
 	if _, err := c.writer.Write(wire); err != nil {
 		log.Printf("[ipc] client: write event %s: %v", e.Type, err)
 		return
 	}
 	if err := c.writer.Flush(); err != nil {
 		log.Printf("[ipc] client: flush event %s: %v", e.Type, err)
+		return
+	}
+	if err := c.conn.SetWriteDeadline(time.Time{}); err != nil {
+		log.Printf("[ipc] client: clear write deadline for event %s: %v", e.Type, err)
 	}
 }
 
