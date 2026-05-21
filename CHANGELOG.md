@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.4](https://github.com/Syfra3/ancora/compare/v1.10.3...v1.10.4) (2026-05-21)
+
+
+### Bug Fixes
+
+* **mcp:** bound IPC event writes during saves ([#44](https://github.com/Syfra3/ancora/issues/44)) ([c581a93](https://github.com/Syfra3/ancora/commit/c581a93c6f8994d719102ffdf4b6789eba71d4a9))
+
 ## [1.10.3](https://github.com/Syfra3/ancora/compare/v1.10.2...v1.10.3) (2026-05-10)
 
 
