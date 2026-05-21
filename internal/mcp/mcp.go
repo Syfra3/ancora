@@ -929,7 +929,9 @@ func handleSave(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		}
 
 		// Ensure the session exists
-		s.CreateSession(sessionID, workspace, "")
+		if err := s.CreateSession(sessionID, workspace, ""); err != nil {
+			return mcp.NewToolResultError("Failed to create session: " + err.Error()), nil
+		}
 
 		truncated := len(content) > s.MaxObservationLength()
 
