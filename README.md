@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/ancora-logo.png" alt="Ancora Logo" width="200"/>
+  <img src="assets/ancora-header.png" alt="Ancora" width="100%"/>
 
   **Scalable memory for real AI agent orchestration and shared knowledge**
   
