@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.0](https://github.com/Syfra3/ancora/compare/v1.10.4...v1.11.0) (2026-07-01)
+
+
+### Features
+
+* **mcp:** remove Vela tool forwarding from Ancora ([#46](https://github.com/Syfra3/ancora/issues/46)) ([ef5820a](https://github.com/Syfra3/ancora/commit/ef5820a46a0e9e9d06deee823bb141e163d6347d))
+
 ## [1.10.4](https://github.com/Syfra3/ancora/compare/v1.10.3...v1.10.4) (2026-05-21)
 
 
