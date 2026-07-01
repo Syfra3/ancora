@@ -490,7 +490,7 @@ func (m WizardModel) viewModeChoice() string {
 		"Choose how Ancora should expose retrieval:\n\n" +
 		itemsStr.String() +
 		"Ancora only keeps memory tools only.\n" +
-		"Ancora + Vela forwards vela_* retrieval tools through Ancora MCP.\n\n" +
+		"Ancora + Vela keeps Ancora MCP for memory and Vela MCP for graph retrieval.\n\n" +
 		hintStyle.Render("[↑/↓ to select, Enter to confirm, q = quit]")
 
 	b.WriteString(boxStyle.Render(content))
