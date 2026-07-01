@@ -69,8 +69,8 @@ Use this if you only want memory.
 
 Use this if you want memory **and** graph retrieval.
 
-- Ancora stays the main MCP surface
-- Vela adds `vela_*` graph tools behind Ancora
+- Ancora MCP exposes memory tools only (`ancora_*`)
+- Vela MCP exposes graph tools separately (`vela_*`)
 - memory writes still belong to Ancora
 
 #### 3. Vela only
@@ -208,8 +208,8 @@ ancora setup opencode     # Auto-install for OpenCode
 **What changes when Vela is also installed:**
 
 - Ancora still owns memory tools
-- Ancora exposes forwarded `vela_*` graph tools
-- the user keeps one primary MCP surface instead of choosing between two memory systems
+- Vela owns graph tools through its own MCP server
+- configure both MCP servers when you want both memory and graph retrieval
 
 ### For dummies: recommended paths
 
@@ -231,7 +231,7 @@ brew install ancora
 ancora setup
 ```
 
-If `vela` is in your PATH, Ancora will detect it automatically.
+Configure Vela as its own MCP server when you want graph retrieval in your agent.
 
 Example Vela graph queries:
 
