@@ -4667,6 +4667,27 @@ func TestCountObservationsForProject(t *testing.T) {
 
 // ─── Semantic Search Tests ────────────────────────────────────────────────────
 
+// Existing semantic fixtures now use known provenance, not the legacy ID-only
+// setter. Non-target jobs can remain leased in this isolated fixture.
+func setTestCertifiedEmbedding(s *Store, id int64, vec []float32) error {
+	spec := EmbeddingSpec{Model: "regression-fake", Preprocessing: "title-dot-content-v1", Dimensions: len(vec)}
+	if err := s.ConfigureEmbedding(spec); err != nil {
+		return err
+	}
+	if _, err := s.ReconcileEmbeddings(256); err != nil {
+		return err
+	}
+	for {
+		j, err := s.LeaseEmbedding(spec, time.Unix(100, 0), time.Minute)
+		if err != nil {
+			return err
+		}
+		if j.ObservationID == id {
+			return s.CompleteEmbedding(*j, vec, time.Unix(100, 0))
+		}
+	}
+}
+
 func TestSetEmbeddingAndSearchSemantic(t *testing.T) {
 	s := newTestStore(t)
 
@@ -4705,10 +4726,10 @@ func TestSetEmbeddingAndSearchSemantic(t *testing.T) {
 	vec1 := []float32{1.0, 0.0, 0.0}
 	vec2 := []float32{0.0, 1.0, 0.0}
 
-	if err := s.SetEmbedding(id1, vec1); err != nil {
+	if err := setTestCertifiedEmbedding(s, id1, vec1); err != nil {
 		t.Fatalf("SetEmbedding 1: %v", err)
 	}
-	if err := s.SetEmbedding(id2, vec2); err != nil {
+	if err := setTestCertifiedEmbedding(s, id2, vec2); err != nil {
 		t.Fatalf("SetEmbedding 2: %v", err)
 	}
 
@@ -5093,7 +5114,7 @@ func TestListObservationsForEmbedding(t *testing.T) {
 
 	// Set embedding for obs2
 	embedding := []float32{0.1, 0.2, 0.3, 0.4}
-	if err := s.SetEmbedding(obs2, embedding); err != nil {
+	if err := setTestCertifiedEmbedding(s, obs2, embedding); err != nil {
 		t.Fatalf("set embedding: %v", err)
 	}
 

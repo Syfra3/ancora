@@ -14,6 +14,20 @@ type stubEmbedder struct {
 	err error
 }
 
+func (stubEmbedder) EmbeddingSpec() store.EmbeddingSpec { return harnessSpec }
+func (slowEmbedder) EmbeddingSpec() store.EmbeddingSpec { return harnessSpec }
+
+func setSearchTestEmbedding(s *store.Store, id int64, vec []float32) error {
+	j, err := s.LeaseEmbedding(harnessSpec, time.Unix(100, 0), time.Minute)
+	if err != nil {
+		return err
+	}
+	if j.ObservationID != id {
+		return fmt.Errorf("unexpected job %d want %d", j.ObservationID, id)
+	}
+	return s.CompleteEmbedding(*j, vec, time.Unix(100, 0))
+}
+
 func (s stubEmbedder) Embed(_ string) ([]float32, error) {
 	if s.err != nil {
 		return nil, s.err
@@ -44,6 +58,9 @@ func newSearchTestStore(t *testing.T) *store.Store {
 		t.Fatalf("store.New: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	if err := s.ConfigureEmbedding(harnessSpec); err != nil {
+		t.Fatal(err)
+	}
 	return s
 }
 
@@ -215,10 +232,10 @@ func TestSearchWithOptionsHybridHonorsExplicitProjectFilter(t *testing.T) {
 	}
 
 	vec := []float32{0.42, 0.11}
-	if err := s.SetEmbedding(alphaID, vec); err != nil {
+	if err := setSearchTestEmbedding(s, alphaID, vec); err != nil {
 		t.Fatalf("set alpha embedding: %v", err)
 	}
-	if err := s.SetEmbedding(betaID, vec); err != nil {
+	if err := setSearchTestEmbedding(s, betaID, vec); err != nil {
 		t.Fatalf("set beta embedding: %v", err)
 	}
 
@@ -326,7 +343,7 @@ func TestHybridSearchSemanticOnly(t *testing.T) {
 	}
 
 	vec := []float32{0.7, 0.3}
-	if err := s.SetEmbedding(id, vec); err != nil {
+	if err := setSearchTestEmbedding(s, id, vec); err != nil {
 		t.Fatalf("set embedding: %v", err)
 	}
 
@@ -367,7 +384,7 @@ func TestHybridSearchTrueHybrid(t *testing.T) {
 
 	vec := []float32{0.5, 0.5}
 	for _, id := range ids {
-		if err := s.SetEmbedding(id, vec); err != nil {
+		if err := setSearchTestEmbedding(s, id, vec); err != nil {
 			t.Fatalf("set embedding: %v", err)
 		}
 	}
@@ -468,7 +485,7 @@ func TestFilterResultsByVisibility(t *testing.T) {
 	// Add embeddings for semantic search.
 	vec := []float32{0.5, 0.5}
 	for _, id := range ids {
-		if err := s.SetEmbedding(id, vec); err != nil {
+		if err := setSearchTestEmbedding(s, id, vec); err != nil {
 			t.Fatalf("set embedding: %v", err)
 		}
 	}
@@ -556,7 +573,7 @@ func TestSearchWithOptionsSemanticMode(t *testing.T) {
 	}
 
 	vec := []float32{0.8, 0.2}
-	if err := s.SetEmbedding(id, vec); err != nil {
+	if err := setSearchTestEmbedding(s, id, vec); err != nil {
 		t.Fatalf("set embedding: %v", err)
 	}
 
@@ -656,7 +673,7 @@ func TestFilterResultsByWorkVisibilityHybridSearchReturnsWorkObs(t *testing.T) {
 	// Assign embeddings to both so semantic path runs
 	vec := []float32{0.5, 0.5}
 	for _, id := range []int64{workID, personalID} {
-		if err := s.SetEmbedding(id, vec); err != nil {
+		if err := setSearchTestEmbedding(s, id, vec); err != nil {
 			t.Fatalf("set embedding: %v", err)
 		}
 	}

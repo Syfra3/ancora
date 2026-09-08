@@ -18,7 +18,7 @@ import (
 //
 // This test does NOT require the actual GGUF model — it uses embed.MockEmbedder
 // returning a fixed vector. The purpose is to verify the full pipeline:
-// store schema → SetEmbedding → SearchSemantic → correct result.
+// store schema → fenced completion → SearchSemantic → correct result.
 func TestIntegrationSaveEmbedHybridSearch(t *testing.T) {
 	s := newTestStore(t)
 
@@ -55,7 +55,7 @@ func TestIntegrationSaveEmbedHybridSearch(t *testing.T) {
 		t.Fatalf("expected %d dims, got %d", dims, len(embedding))
 	}
 
-	if err := s.SetEmbedding(id, embedding); err != nil {
+	if err := setTestCertifiedEmbedding(s, id, embedding); err != nil {
 		t.Fatalf("SetEmbedding: %v", err)
 	}
 

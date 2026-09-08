@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Syfra3/ancora/internal/embedding"
 	"github.com/Syfra3/ancora/internal/store"
 )
 
@@ -66,15 +67,15 @@ func SearchWithOptions(query string, opts store.SearchOptions, embedder Embedder
 		return nil, ModeKeyword, err
 	}
 
-	queryVec := embedQuery(embedder, query)
+	queryVec, spec := embedQueryWithSpec(embedder, query)
 
 	var semResults []store.SearchResult
 	if queryVec != nil {
-		semResults, err = s.SearchSemantic(queryVec, candidateLimit(limit))
+		semanticOpts := opts
+		semanticOpts.Limit = candidateLimit(limit)
+		semResults, err = s.SearchSemanticWithSpec(queryVec, semanticOpts, spec)
 		if err != nil {
 			semResults = nil
-		} else {
-			semResults = filterResults(semResults, opts)
 		}
 	}
 
@@ -99,18 +100,33 @@ func SearchWithOptions(query string, opts store.SearchOptions, embedder Embedder
 }
 
 func embedQuery(embedder Embedder, query string) []float32 {
+	vec, _ := embedQueryWithSpec(embedder, query)
+	return vec
+}
+
+func embedQueryWithSpec(embedder Embedder, query string) ([]float32, store.EmbeddingSpec) {
 	if embedder == nil {
-		return nil
+		return nil, store.EmbeddingSpec{}
 	}
 
 	type result struct {
-		vec []float32
-		err error
+		vec  []float32
+		err  error
+		spec store.EmbeddingSpec
 	}
 	resultCh := make(chan result, 1)
 	go func() {
+		spec, err := embedding.ResolveSpec(embedder)
+		if err != nil {
+			resultCh <- result{err: err}
+			return
+		}
 		vec, err := embedder.Embed(query)
-		resultCh <- result{vec: vec, err: err}
+		after, identityErr := embedding.ResolveSpec(embedder)
+		if identityErr != nil || after != spec {
+			vec = nil
+		}
+		resultCh <- result{vec: vec, err: err, spec: spec}
 	}()
 
 	timer := time.NewTimer(queryEmbedTimeout)
@@ -118,12 +134,12 @@ func embedQuery(embedder Embedder, query string) []float32 {
 
 	select {
 	case result := <-resultCh:
-		if result.err != nil {
-			return nil
+		if result.err != nil || store.ValidateEmbeddingVector(result.vec, result.spec.Dimensions) != nil {
+			return nil, store.EmbeddingSpec{}
 		}
-		return result.vec
+		return result.vec, result.spec
 	case <-timer.C:
-		return nil
+		return nil, store.EmbeddingSpec{}
 	}
 }
 
