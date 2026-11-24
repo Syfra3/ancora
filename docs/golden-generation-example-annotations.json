@@ -1,0 +1,4 @@
+[
+  {"corpus_id":"illustration-only-v1","case_id":"example-1","split":"example","arm":"retrieved","correctness":false,"completeness":false,"faithfulness":true,"appropriate_abstention":true},
+  {"corpus_id":"illustration-only-v1","case_id":"example-1","split":"example","arm":"oracle","correctness":true,"completeness":true,"faithfulness":true,"appropriate_abstention":true}
+]

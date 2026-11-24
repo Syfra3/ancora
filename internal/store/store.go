@@ -455,7 +455,12 @@ func New(cfg Config) (*Store, error) {
 
 	s := &Store{db: db, cfg: cfg, hooks: defaultStoreHooks()}
 	if err := s.migrate(); err != nil {
+		db.Close()
 		return nil, fmt.Errorf("ancora: migration: %w", err)
+	}
+	if _, err := s.ReconcileEmbeddings(128); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ancora: embedding reconciliation: %w", err)
 	}
 	if err := s.repairEnrolledProjectSyncMutations(); err != nil {
 		return nil, fmt.Errorf("ancora: repair enrolled sync journal: %w", err)
@@ -766,7 +771,7 @@ func (s *Store) migrate() error {
 		}
 	}
 
-	return nil
+	return s.migrateEmbeddingJobs()
 }
 
 func (s *Store) migrateFTSTopicKey() error {
@@ -1670,6 +1675,27 @@ func (s *Store) Timeline(observationID int64, before, after int) (*TimelineResul
 
 // ─── Search (FTS5) ───────────────────────────────────────────────────────────
 
+// searchScope is shared by topic/FTS and semantic candidate selection. The
+// prefix is internal SQL syntax, never caller input. Omitted filters stay omitted.
+func searchScope(opts SearchOptions, prefix string) (string, []any) {
+	opts.Workspace, _ = NormalizeProject(opts.Workspace)
+	clause := ""
+	var args []any
+	for _, f := range []struct{ name, value string }{
+		{"type", opts.Type}, {"workspace", opts.Workspace}, {"visibility", opts.Visibility}, {"organization", opts.Organization},
+	} {
+		if f.value == "" {
+			continue
+		}
+		if f.name == "visibility" {
+			f.value = normalizeScope(f.value)
+		}
+		clause += " AND " + prefix + f.name + " = ?"
+		args = append(args, f.value)
+	}
+	return clause, args
+}
+
 func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error) {
 	// Normalize workspace filter for consistency
 	opts.Workspace, _ = NormalizeProject(opts.Workspace)
@@ -1692,22 +1718,9 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 		`
 		tkArgs := []any{query}
 
-		if opts.Type != "" {
-			tkSQL += " AND type = ?"
-			tkArgs = append(tkArgs, opts.Type)
-		}
-		if opts.Workspace != "" {
-			tkSQL += " AND workspace = ?"
-			tkArgs = append(tkArgs, opts.Workspace)
-		}
-		if opts.Visibility != "" {
-			tkSQL += " AND visibility = ?"
-			tkArgs = append(tkArgs, normalizeScope(opts.Visibility))
-		}
-		if opts.Organization != "" {
-			tkSQL += " AND organization = ?"
-			tkArgs = append(tkArgs, opts.Organization)
-		}
+		scope, scopeArgs := searchScope(opts, "")
+		tkSQL += scope
+		tkArgs = append(tkArgs, scopeArgs...)
 
 		tkSQL += " ORDER BY updated_at DESC LIMIT ?"
 		tkArgs = append(tkArgs, limit)
@@ -1745,25 +1758,9 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 	`
 	args := []any{ftsQuery}
 
-	if opts.Type != "" {
-		sqlQ += " AND o.type = ?"
-		args = append(args, opts.Type)
-	}
-
-	if opts.Workspace != "" {
-		sqlQ += " AND o.workspace = ?"
-		args = append(args, opts.Workspace)
-	}
-
-	if opts.Visibility != "" {
-		sqlQ += " AND o.visibility = ?"
-		args = append(args, normalizeScope(opts.Visibility))
-	}
-
-	if opts.Organization != "" {
-		sqlQ += " AND o.organization = ?"
-		args = append(args, opts.Organization)
-	}
+	scope, scopeArgs := searchScope(opts, "o.")
+	sqlQ += scope
+	args = append(args, scopeArgs...)
 
 	sqlQ += " ORDER BY fts.rank LIMIT ?"
 	args = append(args, limit)
@@ -1806,7 +1803,8 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 	return results, nil
 }
 
-// ListObservationsForEmbedding returns all non-deleted observations that don't have embeddings yet.
+// ListObservationsForEmbedding returns non-deleted observations without a current
+// certified embedding, including legacy vectors whose provenance is unknown.
 // Used for backfilling embeddings after model installation.
 func (s *Store) ListObservationsForEmbedding() ([]Observation, error) {
 	rows, err := s.queryItHook(s.db, `
@@ -1814,7 +1812,12 @@ func (s *Store) ListObservationsForEmbedding() ([]Observation, error) {
 		       workspace, visibility, organization,
 		       topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
 		FROM observations
-		WHERE deleted_at IS NULL AND embedding IS NULL
+		WHERE deleted_at IS NULL AND NOT EXISTS(
+		 SELECT 1 FROM embedding_jobs j JOIN embedding_config c ON c.id=1
+		 WHERE j.observation_id=observations.id AND j.state='ready'
+		 AND j.input=(observations.title || '. ' || observations.content)
+		 AND j.model=c.model AND j.preprocessing=c.preprocessing AND j.dimensions=c.dimensions AND j.config_epoch=c.epoch
+		 AND observations.embedding IS NOT NULL AND length(observations.embedding)=4*j.dimensions)
 		ORDER BY id DESC
 	`)
 	if err != nil {
@@ -1840,44 +1843,79 @@ func (s *Store) ListObservationsForEmbedding() ([]Observation, error) {
 
 // ─── Semantic Search (vector embeddings) ─────────────────────────────────────
 
-// SetEmbedding stores a float32 embedding vector for a given observation ID.
+// SetEmbedding stores an UNCERTIFIED legacy vector for a given observation ID.
 // The vector is stored as little-endian float32 bytes in the embedding BLOB column.
 // Calling with a nil vector clears any existing embedding.
 func (s *Store) SetEmbedding(observationID int64, vec []float32) error {
-	if vec == nil {
-		_, err := s.execHook(s.db,
-			`UPDATE observations SET embedding = NULL WHERE id = ?`,
-			observationID)
+	// Compatibility only: ID-only writes cannot establish provenance. Preserve
+	// the blob, revoke any certificate/lease, and leave exhausted work exhausted.
+	return s.withTx(func(tx *sql.Tx) error {
+		if _, err := s.execHook(tx, `UPDATE embedding_jobs SET state=CASE WHEN state='exhausted' THEN state ELSE 'pending' END,token='',lease_until=0 WHERE observation_id=?`, observationID); err != nil {
+			return err
+		}
+		var blob []byte
+		if vec != nil {
+			blob = serializeVec(vec)
+		}
+		_, err := s.execHook(tx, `UPDATE observations SET embedding=? WHERE id=? AND deleted_at IS NULL`, blob, observationID)
 		return err
-	}
-	blob := serializeVec(vec)
-	_, err := s.execHook(s.db,
-		`UPDATE observations SET embedding = ? WHERE id = ?`,
-		blob, observationID)
-	return err
+	})
 }
 
 // SearchSemantic returns observations ordered by cosine similarity to the
-// query vector. All non-deleted observations with embeddings are loaded and
+// query vector. Non-deleted observations with certified current embeddings are loaded and
 // ranked in Go. For large databases (>100K observations), this is O(n) but
 // acceptable for Phase 1 (embeddings are rare — only stored when the model
 // is available).
 //
 // If limit <= 0, defaults to 10.
 func (s *Store) SearchSemantic(queryVec []float32, limit int) ([]SearchResult, error) {
+	return s.SearchSemanticWithOptions(queryVec, SearchOptions{Limit: limit})
+}
+
+// SearchSemanticWithOptions applies the same scope as keyword search before
+// loading/ranking candidates. Only fenced, current model/revision vectors qualify.
+func (s *Store) SearchSemanticWithOptions(queryVec []float32, opts SearchOptions) ([]SearchResult, error) {
+	return s.searchSemantic(queryVec, opts, nil)
+}
+
+// SearchSemanticWithSpec additionally binds query and document model identities.
+func (s *Store) SearchSemanticWithSpec(queryVec []float32, opts SearchOptions, spec EmbeddingSpec) ([]SearchResult, error) {
+	return s.searchSemantic(queryVec, opts, &spec)
+}
+
+func (s *Store) searchSemantic(queryVec []float32, opts SearchOptions, spec *EmbeddingSpec) ([]SearchResult, error) {
+	if ValidateEmbeddingVector(queryVec, len(queryVec)) != nil {
+		return nil, nil
+	}
+	if spec != nil && ValidateEmbeddingVector(queryVec, spec.Dimensions) != nil {
+		return nil, nil
+	}
+	limit := opts.Limit
 	if limit <= 0 {
 		limit = 10
 	}
 
-	rows, err := s.queryItHook(s.db, `
+	query := `
 		SELECT id, ifnull(sync_id, '') as sync_id, session_id, type, title, content, tool_name,
 		       workspace, visibility, organization,
 		       topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at,
 		       embedding
 		FROM observations
 		WHERE deleted_at IS NULL AND embedding IS NOT NULL
-		ORDER BY id DESC
-	`)
+		AND EXISTS(SELECT 1 FROM embedding_jobs j JOIN embedding_config c ON c.id=1
+		 WHERE j.observation_id=observations.id AND j.state='ready'
+		 AND j.input=(observations.title || '. ' || observations.content)
+		 AND j.model=c.model AND j.preprocessing=c.preprocessing AND j.dimensions=c.dimensions AND j.config_epoch=c.epoch
+		 AND j.dimensions=? AND length(observations.embedding)=4*j.dimensions)
+	`
+	scope, args := searchScope(opts, "")
+	if spec != nil {
+		scope += " AND EXISTS(SELECT 1 FROM embedding_config WHERE model=? AND preprocessing=? AND dimensions=?)"
+		args = append(args, spec.Model, spec.Preprocessing, spec.Dimensions)
+	}
+	query += scope + " ORDER BY id DESC"
+	rows, err := s.queryItHook(s.db, query, append([]any{len(queryVec)}, args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -1901,7 +1939,7 @@ func (s *Store) SearchSemantic(queryVec []float32, limit int) ([]SearchResult, e
 			continue
 		}
 		vec := deserializeVec(blob)
-		if len(vec) == 0 {
+		if ValidateEmbeddingVector(vec, len(queryVec)) != nil {
 			continue
 		}
 		sim := cosineSimilarity32(queryVec, vec)

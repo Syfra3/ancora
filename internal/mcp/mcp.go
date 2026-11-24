@@ -243,6 +243,7 @@ func registerTools(srv *server.MCPServer, s *store.Store, cfg MCPConfig, allowli
 				mcp.WithString("visibility",
 					mcp.Description("Filter by visibility: 'work' for work knowledge, 'personal' for private life knowledge. Omit to search across ALL observations regardless of visibility."),
 				),
+				mcp.WithString("organization", mcp.Description("Optional exact organization filter for keyword and semantic results")),
 				mcp.WithNumber("limit",
 					mcp.Description("Max results (default: 10, max: 20)"),
 				),
@@ -832,12 +833,14 @@ func handleSearch(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		workspace, _ := req.GetArguments()["workspace"].(string)
 		visibility, _ := req.GetArguments()["visibility"].(string)
 		limit := intArg(req, "limit", 10)
+		organization, _ := req.GetArguments()["organization"].(string)
 
 		searchResults, searchMode, err := search.SearchWithOptions(query, store.SearchOptions{
-			Type:       typ,
-			Workspace:  workspace,
-			Visibility: visibility,
-			Limit:      limit,
+			Type:         typ,
+			Workspace:    workspace,
+			Visibility:   visibility,
+			Organization: organization,
+			Limit:        limit,
 		}, cfg.Embedder, s)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Search error: %s. Try simpler keywords.", err)), nil

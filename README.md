@@ -21,6 +21,42 @@
 - Works offline, zero telemetry
 - MIT licensed
 
+## Offline retrieval evaluation
+
+With the Go dependencies already cached, run from the repository root:
+
+```sh
+GOPROXY=off GOTOOLCHAIN=local GOSUMDB=off make eval-retrieval
+GOPROXY=off GOTOOLCHAIN=local GOSUMDB=off make bench-retrieval
+```
+
+The quality job prints expected and ranked fixture titles for each query and
+variant. Recall@5 and MRR@5 are macro averages over queries with at least one
+relevant item; no-relevant queries are excluded from both and separately report
+how many returned any results. Scope violations must be zero. Error-fallback
+results are asserted identical to keyword results. Rankings and scores are
+measurements, not quality thresholds.
+
+Irrelevant-result (noise) and redundancy rates @5 pool returned slots across
+all queries, including no-relevant queries, rather than averaging query rates.
+Noise counts slots whose IDs are not labeled relevant for that query.
+Redundancy counts each slot after the first occurrence of the same ID or a
+hand-labeled duplicate group within that query's top five. A slot can be both
+irrelevant and redundant; relevant duplicates are independently labeled.
+Both rates are N/A when no slots are returned. Empty-result rate counts queries
+with zero returned slots divided by all queries, separately from no-relevant
+counts. Labels and duplicate groups are hand-assigned and incomplete: unmarked
+paraphrases are not detected, and relevance judgments are subjective. This
+small synthetic fixture is illustrative, not representative of production.
+
+The hybrid variant uses explicitly hand-assigned synthetic vectors encoding
+fixture topics: it does **not** measure actual embedding or agent quality.
+The benchmark invokes the real search path against temporary isolated stores
+of 50 and 500 observations; setup and embedding generation are outside the
+timed loop. Go reports ns/op, B/op and allocs/op; results depend on the host,
+and there are no timing thresholds. No real model or model inference is
+included. Both jobs are offline and do not use a user database.
+
 ## Cloud Sync (Coming Soon)
 
 Want your memories synced across all your devices?

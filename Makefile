@@ -56,6 +56,25 @@ fmt-check:
 		exit 1; \
 	fi
 
+## eval-retrieval: Run the offline labeled retrieval evaluation
+.PHONY: eval-retrieval bench-retrieval
+eval-retrieval:
+	$(GO) test -count=1 -v ./internal/search -run '^(TestEvalScorer|TestRetrievalEval)$$'
+
+## eval-generation-test: Test offline paired prompt export and annotation scoring
+.PHONY: eval-generation-test
+eval-generation-test:
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools -p 'test_golden_generation.py' -v
+
+## eval-golden: Run the isolated hand-authored golden retrieval corpus
+.PHONY: eval-golden
+eval-golden:
+	go test ./internal/search -run '^TestGoldenRetrieval$$' -count=1 -v
+
+## bench-retrieval: Benchmark isolated search stores
+bench-retrieval:
+	$(GO) test -count=1 ./internal/search -run '^$$' -bench '^BenchmarkRetrievalEval$$' -benchmem -benchtime=200ms
+
 ## test: Run all tests with summary output (jest-style)
 test:
 	@if command -v $(GOTESTSUM) >/dev/null 2>&1; then \
