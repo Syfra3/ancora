@@ -1,0 +1,13 @@
+{
+  "corpus_id": "illustration-only-v1",
+  "cases": [
+    {
+      "id": "example-1",
+      "split": "example",
+      "question": "What color is the lantern?",
+      "expected": "blue",
+      "retrieved_context": [],
+      "oracle_context": [{"id": "lantern-1", "text": "The lantern is blue."}]
+    }
+  ]
+}

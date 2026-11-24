@@ -1,0 +1,42 @@
+go test -count=1 -v ./internal/search -run '^(TestEvalScorer|TestRetrievalEval)$'
+=== RUN   TestEvalScorer
+=== RUN   TestEvalScorer/slot_metrics
+=== RUN   TestEvalScorer/slot_metrics/mixed_group_and_repeat
+=== RUN   TestEvalScorer/slot_metrics/noise_can_be_redundant
+=== RUN   TestEvalScorer/slot_metrics/cutoff
+=== RUN   TestEvalScorer/slot_metrics/empty_results
+=== RUN   TestEvalScorer/slot_metrics/no_relevance
+=== RUN   TestEvalScorer/empty_relevance
+=== RUN   TestEvalScorer/missing
+=== RUN   TestEvalScorer/rank_and_duplicates
+=== RUN   TestEvalScorer/cutoff
+--- PASS: TestEvalScorer (0.00s)
+    --- PASS: TestEvalScorer/slot_metrics (0.00s)
+        --- PASS: TestEvalScorer/slot_metrics/mixed_group_and_repeat (0.00s)
+        --- PASS: TestEvalScorer/slot_metrics/noise_can_be_redundant (0.00s)
+        --- PASS: TestEvalScorer/slot_metrics/cutoff (0.00s)
+        --- PASS: TestEvalScorer/slot_metrics/empty_results (0.00s)
+        --- PASS: TestEvalScorer/slot_metrics/no_relevance (0.00s)
+    --- PASS: TestEvalScorer/empty_relevance (0.00s)
+    --- PASS: TestEvalScorer/missing (0.00s)
+    --- PASS: TestEvalScorer/rank_and_duplicates (0.00s)
+    --- PASS: TestEvalScorer/cutoff (0.00s)
+=== RUN   TestRetrievalEval
+    eval_test.go:274: variant=keyword query=exact mode=keyword expected=[jwt jwt-paraphrase] ranked=[jwt jwt-paraphrase] recall=1.000 rr=1.000 eligible=true
+    eval_test.go:274: variant=keyword query=paraphrase mode=keyword expected=[jwt jwt-paraphrase session] ranked=[] recall=0.000 rr=0.000 eligible=true
+    eval_test.go:274: variant=keyword query=multiple mode=keyword expected=[jwt jwt-paraphrase session] ranked=[] recall=0.000 rr=0.000 eligible=true
+    eval_test.go:274: variant=keyword query=no-relevant mode=keyword expected=[] ranked=[] recall=0.000 rr=0.000 eligible=false
+    eval_test.go:276: SUMMARY variant=keyword Recall@5=0.333 MRR@5=0.333 eligible=3 scope_violations=0 no_relevant=1 no_relevant_with_results=0 noise@5=0/2 (0.0%) redundancy@5=1/2 (50.0%) empty_results=3/4 (75.0%)
+    eval_test.go:274: variant=synthetic-hybrid query=exact mode=hybrid expected=[jwt jwt-paraphrase] ranked=[jwt-paraphrase jwt session backup fts] recall=1.000 rr=1.000 eligible=true
+    eval_test.go:274: variant=synthetic-hybrid query=paraphrase mode=semantic expected=[jwt jwt-paraphrase session] ranked=[jwt-paraphrase jwt session backup fts] recall=1.000 rr=1.000 eligible=true
+    eval_test.go:274: variant=synthetic-hybrid query=multiple mode=semantic expected=[jwt jwt-paraphrase session] ranked=[jwt-paraphrase jwt session backup fts] recall=1.000 rr=1.000 eligible=true
+    eval_test.go:274: variant=synthetic-hybrid query=no-relevant mode=semantic expected=[] ranked=[fts session backup jwt-paraphrase jwt] recall=0.000 rr=0.000 eligible=false
+    eval_test.go:276: SUMMARY variant=synthetic-hybrid Recall@5=1.000 MRR@5=1.000 eligible=3 scope_violations=0 no_relevant=1 no_relevant_with_results=1 noise@5=12/20 (60.0%) redundancy@5=4/20 (20.0%) empty_results=0/4 (0.0%)
+    eval_test.go:274: variant=error-fallback query=exact mode=keyword expected=[jwt jwt-paraphrase] ranked=[jwt jwt-paraphrase] recall=1.000 rr=1.000 eligible=true
+    eval_test.go:274: variant=error-fallback query=paraphrase mode=keyword expected=[jwt jwt-paraphrase session] ranked=[] recall=0.000 rr=0.000 eligible=true
+    eval_test.go:274: variant=error-fallback query=multiple mode=keyword expected=[jwt jwt-paraphrase session] ranked=[] recall=0.000 rr=0.000 eligible=true
+    eval_test.go:274: variant=error-fallback query=no-relevant mode=keyword expected=[] ranked=[] recall=0.000 rr=0.000 eligible=false
+    eval_test.go:276: SUMMARY variant=error-fallback Recall@5=0.333 MRR@5=0.333 eligible=3 scope_violations=0 no_relevant=1 no_relevant_with_results=0 noise@5=0/2 (0.0%) redundancy@5=1/2 (50.0%) empty_results=3/4 (75.0%)
+--- PASS: TestRetrievalEval (0.01s)
+PASS
+ok  	github.com/Syfra3/ancora/internal/search	0.014s
