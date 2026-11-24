@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.0](https://github.com/Syfra3/ancora/compare/v1.12.0...v1.13.0) (2026-11-24)
+
+
+### Features
+
+* improve harness context reliability and add retrieval evaluation ([#50](https://github.com/Syfra3/ancora/issues/50)) ([59c97d7](https://github.com/Syfra3/ancora/commit/59c97d71d6ce08cc8a77c6212a6caedfd6b03ea8))
+
 ## [1.12.0](https://github.com/Syfra3/ancora/compare/v1.11.0...v1.12.0) (2026-09-08)
 
 
