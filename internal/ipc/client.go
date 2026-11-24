@@ -16,7 +16,7 @@ import (
 // This is used when ancora mcp starts and the IPC socket is already owned by
 // another ancora process (e.g. the system-installed binary). Rather than
 // failing silently, the local build connects as a client and emits events
-// through the existing server — so Vela receives them normally.
+// through the existing server so external event subscribers receive them normally.
 //
 // It implements the same EventEmitter interface as *Server so the store wires
 // it in identically.

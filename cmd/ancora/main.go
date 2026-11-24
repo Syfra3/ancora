@@ -353,9 +353,9 @@ type ipcClient interface {
 //
 // It first tries to START a new IPC server (bind the socket). If the socket
 // is already owned by another ancora process (EADDRINUSE), it falls back to
-// CONNECTING as a client — events are forwarded through the existing server,
-// so Vela receives them normally. This is the key path when running a local
-// dev build alongside the system-installed ancora MCP process.
+// CONNECTING as a client — events are forwarded through the existing server
+// so external event subscribers receive them normally. This is the key path
+// when running a local dev build alongside the system-installed ancora MCP process.
 func startIPCEventServer(s *store.Store) (ipcStopper, error) {
 	secret, err := ipcLoadOrCreateSecret("")
 	if err != nil {

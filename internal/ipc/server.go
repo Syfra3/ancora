@@ -257,7 +257,7 @@ func (s *Server) handleConn(conn net.Conn) {
 	// If the client sends a valid NDJSON Event line, re-broadcast it to all
 	// OTHER subscribers. This allows a secondary ancora process (e.g. a local
 	// dev build) to connect as a client and inject events through the primary
-	// server so that Vela and other listeners receive them normally.
+	// server so that external listeners receive them normally.
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
